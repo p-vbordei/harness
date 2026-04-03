@@ -238,4 +238,4 @@ Key design decisions documented in the [implementation plan](/Users/vladbordei/.
 
 ## License
 
-Private repository.
+Apache License 2.0 - see [LICENSE](LICENSE).
