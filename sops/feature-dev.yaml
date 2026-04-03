@@ -1,0 +1,224 @@
+sop_id: feature-dev
+name: Feature Development
+description: >-
+  End-to-end workflow for developing a new feature, from requirements analysis
+  through implementation, testing, and review. Suitable for medium-complexity
+  features that touch multiple layers of the codebase.
+default_retry_limit: 3
+pass_threshold: 3.5
+
+phases:
+  # -----------------------------------------------------------------------
+  # Phase 1: Planning
+  # -----------------------------------------------------------------------
+  - id: planning
+    name: Planning
+    steps:
+      - id: requirements-analysis
+        title: Requirements Analysis
+        instruction: >-
+          Analyze the feature request and produce a structured set of user
+          stories with clear acceptance criteria. Identify constraints such as
+          performance budgets, compatibility requirements, or security
+          considerations. Explicitly list items that are out of scope to
+          prevent scope creep during implementation.
+        acceptance_criteria:
+          - At least one user story is defined with a clear "As a / I want / So that" structure
+          - Each user story has testable acceptance criteria
+          - Constraints and non-functional requirements are documented
+          - Out-of-scope items are explicitly listed
+        on_fail: retry
+
+      - id: technical-design
+        title: Technical Design
+        instruction: >-
+          Based on the requirements, identify the files and modules that need
+          to be created or modified. Document any data model changes including
+          new fields, tables, or migrations required. Outline API changes such
+          as new endpoints, modified request/response shapes, or changed
+          authentication rules. Define a testing strategy that covers unit,
+          integration, and manual verification levels.
+        acceptance_criteria:
+          - List of files to create or modify is documented
+          - Data model changes are specified with field names and types
+          - API surface changes are described with endpoint paths and methods
+          - Testing strategy identifies what will be tested at each level
+        depends_on:
+          - requirements-analysis
+        on_fail: retry
+
+      - id: implementation-plan
+        title: Implementation Plan
+        instruction: >-
+          Break the technical design into an ordered list of implementation
+          tasks. Each task should be small enough to complete and verify
+          independently. Identify dependencies between tasks so that work
+          proceeds in a logical order and earlier tasks provide the foundation
+          for later ones.
+        acceptance_criteria:
+          - Task list contains at least three discrete tasks
+          - Each task has a clear definition of done
+          - Dependencies between tasks are identified and ordering is logical
+        depends_on:
+          - technical-design
+        on_fail: retry
+
+  # -----------------------------------------------------------------------
+  # Phase 2: Implementation
+  # -----------------------------------------------------------------------
+  - id: implementation
+    name: Implementation
+    steps:
+      - id: core-implementation
+        title: Core Implementation
+        instruction: >-
+          Implement the main feature logic according to the technical design
+          and implementation plan. Focus on the core business rules and
+          algorithms first, without worrying about API layers or persistence.
+          Keep functions small, well-named, and testable in isolation.
+        acceptance_criteria:
+          - Core logic is implemented and handles the primary use case
+          - Edge cases identified in requirements are handled
+          - Code follows existing project style and conventions
+          - No hardcoded values that should be configurable
+        on_fail: retry
+
+      - id: api-interface-layer
+        title: API / Interface Layer
+        instruction: >-
+          Implement the API endpoints, CLI commands, or UI components that
+          expose the core feature to users. Validate inputs at the boundary,
+          return meaningful error messages, and ensure response formats match
+          the technical design. Follow existing patterns in the codebase for
+          routing, serialization, and error handling.
+        acceptance_criteria:
+          - All specified endpoints or interface components are implemented
+          - Input validation rejects malformed requests with clear error messages
+          - Response formats match the documented API contract
+        depends_on:
+          - core-implementation
+        on_fail: retry
+
+      - id: data-layer
+        title: Data Layer
+        instruction: >-
+          Implement the data models, database migrations, and storage logic
+          required by the feature. Ensure migrations are reversible where
+          possible. Add appropriate indexes for query patterns identified in
+          the design. Handle serialization and deserialization between the
+          storage format and domain objects.
+        acceptance_criteria:
+          - Data models are defined with correct field types and constraints
+          - Migrations run forward and backward without errors
+          - Queries use appropriate indexes and avoid N+1 patterns
+        depends_on:
+          - core-implementation
+        on_fail: retry
+
+      - id: integration
+        title: Integration
+        instruction: >-
+          Connect the core logic, API layer, and data layer so the feature
+          works end to end. Wire up dependency injection or service
+          initialization. Verify that data flows correctly from the interface
+          through the business logic to storage and back. Resolve any
+          interface mismatches between layers.
+        acceptance_criteria:
+          - All layers are connected and the feature runs end to end
+          - No import errors or missing dependency wiring
+          - Data round-trips correctly through create, read, update, and delete paths
+          - Error conditions propagate meaningful messages to the user
+        depends_on:
+          - api-interface-layer
+          - data-layer
+        on_fail: retry
+
+  # -----------------------------------------------------------------------
+  # Phase 3: Testing
+  # -----------------------------------------------------------------------
+  - id: testing
+    name: Testing
+    steps:
+      - id: unit-tests
+        title: Unit Tests
+        instruction: >-
+          Write unit tests for the core logic implemented in the feature.
+          Cover the happy path, edge cases, and error conditions. Mock
+          external dependencies so tests run quickly and deterministically.
+          Aim for meaningful coverage of business rules rather than chasing
+          a percentage metric.
+        acceptance_criteria:
+          - Tests cover the primary happy-path scenario
+          - At least two edge cases or error conditions are tested
+          - All unit tests pass when run in isolation
+        on_fail: retry
+
+      - id: integration-tests
+        title: Integration Tests
+        instruction: >-
+          Write integration tests that verify the feature works across layer
+          boundaries. Test API endpoints with realistic request payloads and
+          assert on response status codes and body content. Verify that data
+          is correctly persisted and retrievable. Use test fixtures or
+          factories to set up required state.
+        acceptance_criteria:
+          - At least one integration test exercises the full request-response cycle
+          - Tests verify data persistence and retrieval
+          - All integration tests pass in the test environment
+        depends_on:
+          - unit-tests
+        on_fail: retry
+
+      - id: manual-verification
+        title: Manual Verification
+        instruction: >-
+          Manually exercise the feature end to end in a running environment.
+          Walk through each user story and verify its acceptance criteria are
+          met. Test with realistic data and check for visual or behavioral
+          issues that automated tests may miss. Document any anomalies found
+          during verification.
+        acceptance_criteria:
+          - Each user story's acceptance criteria has been verified manually
+          - No critical or high-severity issues remain open
+          - Verification results are documented with pass or fail per criterion
+        depends_on:
+          - integration-tests
+        on_fail: retry
+
+  # -----------------------------------------------------------------------
+  # Phase 4: Review
+  # -----------------------------------------------------------------------
+  - id: review
+    name: Review
+    steps:
+      - id: code-review
+        title: Code Review
+        instruction: >-
+          Perform a self-review of all changes before requesting external
+          review. Check for code quality issues such as dead code, unclear
+          naming, or missing error handling. Verify that no secrets or
+          credentials are included. Assess performance implications and
+          confirm there are no obvious security vulnerabilities such as
+          injection or broken access control.
+        acceptance_criteria:
+          - No dead code, debug statements, or TODO comments left unresolved
+          - No secrets, credentials, or sensitive data in the changeset
+          - Performance-sensitive paths have been considered and are acceptable
+          - Security checklist items (input validation, auth, injection) are addressed
+        on_fail: retry
+
+      - id: documentation
+        title: Documentation
+        instruction: >-
+          Update relevant documentation to reflect the new feature. Add or
+          update API docs, configuration references, or user-facing guides as
+          appropriate. Ensure inline code comments explain non-obvious design
+          decisions. Update the changelog or release notes if the project
+          maintains them.
+        acceptance_criteria:
+          - Public API changes are reflected in documentation
+          - Non-obvious code sections have explanatory comments
+          - Changelog or release notes are updated if applicable
+        depends_on:
+          - code-review
+        on_fail: retry

@@ -1,0 +1,6 @@
+{
+  "name": "harness",
+  "version": "0.1.0",
+  "description": "Quality-gated multi-step SOP execution with separate LLM evaluator",
+  "keywords": ["harness", "sop", "quality-gate", "evaluator", "workflow"]
+}

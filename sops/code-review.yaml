@@ -1,0 +1,153 @@
+sop_id: code-review
+name: Code Review
+description: >-
+  Structured code review workflow covering security, performance, quality,
+  and accessibility. Analysis steps are independent and can conceptually
+  run in parallel. Produces a consolidated findings report with prioritized
+  fix recommendations.
+default_retry_limit: 3
+pass_threshold: 3.5
+
+phases:
+  # -----------------------------------------------------------------------
+  # Phase 1: Setup
+  # -----------------------------------------------------------------------
+  - id: setup
+    name: Setup
+
+    steps:
+      - id: identify-changes
+        title: Identify Changes and Scope
+        instruction: >-
+          Identify all files and modules modified in the changeset under
+          review. Categorize changes by type: new files, modified files,
+          deleted files, renamed/moved files. Note the primary languages
+          and frameworks involved. Summarize the intent of the change in
+          one paragraph. Flag any files that are unusually large diffs
+          (> 300 lines changed) or that touch critical paths (auth,
+          payments, data models, infrastructure).
+        acceptance_criteria:
+          - All changed files are listed with their change type (new/modified/deleted/renamed)
+          - Languages and frameworks involved are identified
+          - Intent of the change is summarized in one paragraph
+          - Files with large diffs or critical-path changes are flagged
+        on_fail: retry
+
+  # -----------------------------------------------------------------------
+  # Phase 2: Analysis
+  # -----------------------------------------------------------------------
+  # These four steps have NO depends_on between them. They are independent
+  # reviews that each depend only on the setup step from Phase 1. Within
+  # Phase 2 they execute in declaration order but are conceptually parallel.
+  # -----------------------------------------------------------------------
+  - id: analysis
+    name: Analysis
+
+    steps:
+      - id: security-review
+        title: Security Review
+        evaluator_profile: strict
+        instruction: >-
+          Review the changeset for security vulnerabilities. Check for:
+          injection flaws (SQL, XSS, command, path traversal), broken
+          authentication or authorization, sensitive data exposure (secrets,
+          PII, tokens in code or logs), insecure deserialization, missing
+          input validation, and unsafe dependency additions. For each
+          finding, cite the file and line number.
+        acceptance_criteria:
+          - Each of the OWASP categories listed in the instruction is explicitly addressed
+          - Findings include file path and line number
+          - Severity is assigned to each finding (critical/high/medium/low)
+          - If no issues are found in a category, it is marked as reviewed with "no issues found"
+          - New dependencies are checked against known vulnerability databases
+        on_fail: abort
+
+      - id: performance-review
+        title: Performance Review
+        instruction: >-
+          Review the changeset for performance issues. Check for: N+1
+          query patterns, missing database indexes for new query paths,
+          unbounded loops or list operations, large memory allocations,
+          missing pagination, synchronous blocking in async contexts, and
+          unnecessary network calls. Consider both average-case and
+          worst-case performance.
+        acceptance_criteria:
+          - Database query patterns are analyzed (N+1, missing indexes, unbounded results)
+          - Memory and CPU concerns are addressed (large allocations, unbounded loops)
+          - Async/sync boundary issues are checked
+          - At least one performance consideration is raised or explicitly marked as acceptable
+        on_fail: retry
+
+      - id: quality-review
+        title: Code Quality Review
+        instruction: >-
+          Review the changeset for code quality. Check for: naming clarity,
+          function length and complexity, duplication with existing code,
+          proper error handling and propagation, test coverage for new
+          logic, adherence to project conventions, dead code or commented-out
+          blocks, and TODO/FIXME/HACK comments without tracking issues.
+        acceptance_criteria:
+          - Naming conventions are evaluated against project standards
+          - Functions exceeding 40 lines or high cyclomatic complexity are flagged
+          - Duplication with existing codebase is checked
+          - Error handling patterns are reviewed (no silent swallows, proper propagation)
+          - Untracked TODOs or dead code are identified
+        on_fail: retry
+
+      - id: accessibility-review
+        title: Accessibility Review
+        instruction: >-
+          Review UI-related changes for accessibility compliance. Check for:
+          semantic HTML usage, ARIA attributes where needed, keyboard
+          navigation support, color contrast ratios, screen reader
+          compatibility, focus management, and alt text for images. If the
+          changeset has no UI components, document that and note any
+          API-level accessibility concerns (e.g., error message clarity for
+          assistive technology consumers).
+        acceptance_criteria:
+          - Semantic HTML and ARIA usage are evaluated for all UI changes
+          - Keyboard navigation impact is assessed
+          - Color contrast and visual accessibility are checked
+          - If no UI changes exist, this is explicitly stated with justification for marking complete
+        on_fail: skip
+
+  # -----------------------------------------------------------------------
+  # Phase 3: Report
+  # -----------------------------------------------------------------------
+  - id: report
+    name: Report
+
+    steps:
+      - id: findings-consolidation
+        title: Findings Consolidation
+        instruction: >-
+          Consolidate findings from all four analysis steps into a single
+          structured report. Deduplicate findings that appear in multiple
+          reviews. Assign a final severity to each unique finding. Order
+          by severity (blockers first, then warnings, then suggestions).
+          Include a summary count: N blockers, N warnings, N suggestions.
+        acceptance_criteria:
+          - All findings from security, performance, quality, and accessibility reviews are included
+          - Duplicate findings are merged with the higher severity retained
+          - Each finding has a final severity (blocker/warning/suggestion)
+          - Summary count of blockers, warnings, and suggestions is provided
+          - Findings are ordered by severity
+        on_fail: retry
+
+      - id: fix-recommendations
+        title: Fix Recommendations
+        instruction: >-
+          For each blocker and warning, provide a specific fix recommendation.
+          Include: what to change, where to change it (file and function),
+          and a brief code example or pseudocode where helpful. For
+          suggestions, a one-sentence recommendation is sufficient. Group
+          fixes by priority: must-fix-before-merge, should-fix-before-merge,
+          and consider-for-follow-up.
+        acceptance_criteria:
+          - Every blocker and warning has a fix recommendation with file/function reference
+          - At least one code example or pseudocode snippet is included for a non-trivial fix
+          - Fixes are grouped into must-fix, should-fix, and follow-up categories
+          - Recommendations are actionable by the original author without additional context
+        depends_on:
+          - findings-consolidation
+        on_fail: retry

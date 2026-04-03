@@ -1,0 +1,153 @@
+sop_id: investigation
+name: Security Investigation
+description: >-
+  Structured security research and investigation workflow. Covers
+  reconnaissance, multi-angle analysis with evidence collection, and
+  actionable reporting with remediation guidance. Use for vulnerability
+  assessments, incident investigations, or threat analysis.
+default_retry_limit: 3
+pass_threshold: 3.5
+
+phases:
+  # -----------------------------------------------------------------------
+  # Phase 1: Reconnaissance
+  # -----------------------------------------------------------------------
+  - id: recon
+    name: Reconnaissance
+
+    steps:
+      - id: scope-definition
+        title: Scope Definition
+        instruction: >-
+          Define the investigation scope. Identify the target systems,
+          assets, and boundaries. Document what is in scope and what is
+          explicitly excluded. List known constraints such as access
+          limitations, time windows, or legal boundaries. Establish the
+          investigation objective in one clear sentence.
+        acceptance_criteria:
+          - Investigation objective is stated in one sentence
+          - Target systems and assets are listed with identifiers (hostnames, URLs, repos, etc.)
+          - In-scope and out-of-scope boundaries are explicitly documented
+          - Known constraints and limitations are listed
+        on_fail: retry
+
+      - id: info-gathering
+        title: Information Gathering
+        instruction: >-
+          Collect relevant information about the target within the defined
+          scope. Enumerate exposed services, endpoints, versions, and
+          configurations. Gather publicly available data such as DNS records,
+          certificate details, technology fingerprints, or code repository
+          metadata. Organize findings by target asset.
+        acceptance_criteria:
+          - Each in-scope asset has at least one data point collected
+          - Findings are organized by asset, not presented as a flat list
+          - Sources of information are cited for each finding
+          - Technology versions and configurations are recorded where observable
+        depends_on:
+          - scope-definition
+        on_fail: retry
+
+  # -----------------------------------------------------------------------
+  # Phase 2: Analysis
+  # -----------------------------------------------------------------------
+  - id: analysis
+    name: Analysis
+
+    steps:
+      - id: vuln-assessment
+        title: Vulnerability Assessment
+        instruction: >-
+          Analyze the gathered information to identify potential
+          vulnerabilities. Cross-reference observed versions and
+          configurations against known vulnerability databases (CVE, NVD,
+          vendor advisories). Classify each finding by type (e.g., injection,
+          misconfiguration, outdated dependency, broken access control).
+          Assign a preliminary severity using CVSS or a comparable framework.
+        acceptance_criteria:
+          - Each identified vulnerability has a type classification
+          - Severity is assigned using CVSS score or High/Medium/Low with justification
+          - At least one CVE or advisory reference is cited where applicable
+          - False positives are called out with reasoning for exclusion
+        on_fail: retry
+
+      - id: impact-analysis
+        title: Impact Analysis
+        instruction: >-
+          For each vulnerability identified, assess the potential business
+          and technical impact if exploited. Consider data exposure,
+          service disruption, lateral movement potential, and regulatory
+          implications. Map vulnerabilities to the CIA triad (confidentiality,
+          integrity, availability) and estimate blast radius.
+        acceptance_criteria:
+          - Each vulnerability is mapped to at least one CIA triad dimension
+          - Business impact is described in concrete terms (e.g., "PII of N users exposed")
+          - Blast radius is estimated (single service, network segment, full environment)
+          - Regulatory implications are noted where relevant (GDPR, HIPAA, PCI-DSS, etc.)
+        depends_on:
+          - vuln-assessment
+        on_fail: retry
+
+      - id: evidence-collection
+        title: Evidence Collection
+        evaluator_profile: strict
+        instruction: >-
+          Compile and organize all evidence supporting the identified
+          vulnerabilities. Each piece of evidence must include: the raw
+          observation (log entry, screenshot, code snippet, HTTP
+          request/response), the timestamp or source location, and a brief
+          explanation of what it demonstrates. Evidence must be reproducible
+          -- another investigator should be able to verify each finding
+          using the documented steps.
+        acceptance_criteria:
+          - Every identified vulnerability has at least one piece of supporting evidence
+          - Each evidence item includes raw data, source location, and explanation
+          - Reproduction steps are documented so another investigator can verify independently
+          - Evidence is organized by vulnerability, not by collection method
+          - No evidence relies solely on tool output without human interpretation
+        depends_on:
+          - vuln-assessment
+        on_fail: abort
+
+  # -----------------------------------------------------------------------
+  # Phase 3: Reporting
+  # -----------------------------------------------------------------------
+  - id: reporting
+    name: Reporting
+
+    steps:
+      - id: findings-report
+        title: Findings Report
+        instruction: >-
+          Produce a structured findings report. For each vulnerability,
+          include: title, severity, affected assets, description, evidence
+          summary, and impact assessment. Order findings by severity
+          (critical first). Include an executive summary (3-5 sentences)
+          suitable for a non-technical audience. End with a risk matrix
+          or summary table.
+        acceptance_criteria:
+          - Executive summary is 3-5 sentences and avoids technical jargon
+          - Each finding includes title, severity, affected assets, description, evidence, and impact
+          - Findings are ordered by severity (critical first)
+          - A summary table or risk matrix is included
+          - Report is self-contained -- a reader does not need external context
+        on_fail: retry
+
+      - id: remediation-recommendations
+        title: Remediation Recommendations
+        instruction: >-
+          For each finding in the report, provide a specific remediation
+          recommendation. Include: the fix (patch, configuration change,
+          code modification), estimated effort (hours/days), priority
+          relative to other fixes, and any dependencies between
+          remediations. Group recommendations into immediate (< 24 hours),
+          short-term (< 1 week), and long-term (> 1 week) categories.
+        acceptance_criteria:
+          - Every finding has a corresponding remediation recommendation
+          - Each recommendation specifies the concrete fix, not just "fix the issue"
+          - Effort estimates are provided for each recommendation
+          - Recommendations are grouped into immediate, short-term, and long-term
+          - Dependencies between remediations are identified where they exist
+        depends_on:
+          - findings-report
+        on_fail: retry

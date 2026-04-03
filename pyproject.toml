@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "harness"
+version = "0.1.0"
+description = "MCP server + Claude Code plugin for quality-gated multi-step SOP execution"
+requires-python = ">=3.11"
+dependencies = [
+    "mcp>=1.0.0",
+    "anthropic>=0.40.0",
+    "pyyaml>=6.0",
+    "jsonschema>=4.20.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+]
+
+[tool.setuptools.packages.find]
+include = ["server*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

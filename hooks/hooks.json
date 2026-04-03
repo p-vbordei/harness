@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "prompt",
+            "prompt": "Check: if a harness session is active (harness_start was called), verify that the agent submitted all required steps via harness_submit_step before completing. If steps remain unsubmitted, block completion with: 'Harness session is still active. Submit remaining steps via harness_submit_step before finishing.' If no harness session is active, allow completion."
+          }
+        ]
+      }
+    ]
+  }
+}

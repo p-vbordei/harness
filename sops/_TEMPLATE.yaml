@@ -1,0 +1,166 @@
+# =============================================================================
+# SOP TEMPLATE
+# =============================================================================
+# Copy this file, rename it to <your-sop-id>.yaml, and customize.
+# The harness will auto-discover any .yaml file in the sops/ directory.
+#
+# Required top-level fields: sop_id, name, phases
+# Optional top-level fields: description, default_retry_limit, pass_threshold
+# =============================================================================
+
+# Unique identifier used to start the SOP: /harness <sop_id>
+# Must be URL-safe (lowercase, hyphens, no spaces).
+sop_id: my-workflow
+
+# Human-readable name shown in session output.
+name: My Workflow
+
+# One-paragraph description of what this SOP accomplishes and when to use it.
+description: >-
+  Describe the purpose and scope of this SOP. This text is shown when
+  listing available SOPs and helps users pick the right workflow.
+
+# How many times a step can be retried before escalating to human review.
+# Each step inherits this unless overridden at the step level.
+# Default: 3
+default_retry_limit: 3
+
+# Minimum weighted score (1.0-5.0) for a step to pass evaluation.
+# The evaluator scores 5 dimensions; this threshold applies to the
+# weighted average. Additionally, no single dimension may score below 3.
+# Default: 3.5
+pass_threshold: 3.5
+
+# --- Future / Optional Fields (not yet enforced by the engine) ---
+#
+# evaluator_profile: default
+#   Controls evaluator strictness. Values:
+#     "default"  - Standard scoring (recommended for most SOPs)
+#     "strict"   - Evaluator is more critical; fewer false passes.
+#                  Use for security, compliance, or evidence-heavy steps.
+#     "lenient"  - Evaluator is more forgiving; good for brainstorming
+#                  or exploratory phases where creativity matters.
+#
+# timeout: 300
+#   Maximum time in seconds for a step before it is marked as timed out.
+#   Optional. Omit to allow unlimited time per step.
+
+phases:
+  # -----------------------------------------------------------------------
+  # Phase 1
+  # -----------------------------------------------------------------------
+  # Phases execute sequentially. Each phase groups related steps.
+  - id: phase-one
+    name: Phase One - Preparation
+
+    steps:
+      # Each step needs: id, title, instruction
+      # Optional: acceptance_criteria, depends_on, on_fail, output_schema
+      - id: step-one
+        title: First Step
+        instruction: >-
+          Write a clear, specific instruction telling the agent exactly what
+          to produce. Good instructions reference concrete outputs: "List all
+          API endpoints that handle authentication" rather than "Look at auth."
+        # -------------------------------------------------------------------
+        # acceptance_criteria: list of strings the evaluator checks against.
+        # Each criterion should be independently verifiable (pass/fail).
+        #
+        # Good patterns:
+        #   - "At least 3 distinct options are listed with pros and cons"
+        #   - "Each finding includes file path, line number, and severity"
+        #   - "SQL queries are syntactically valid and use parameterized inputs"
+        #
+        # Bad patterns (too vague for the evaluator):
+        #   - "Good quality output"
+        #   - "Comprehensive analysis"
+        # -------------------------------------------------------------------
+        acceptance_criteria:
+          - Criterion 1 is specific and testable
+          - Criterion 2 references a measurable output
+          - Criterion 3 checks for a concrete deliverable
+        # -------------------------------------------------------------------
+        # on_fail: what happens when max retries are exhausted.
+        #   "retry"  (default) - Blocks the step and escalates to human review.
+        #                        The session enters "paused" state.
+        #   "skip"   - Marks step as skipped and advances to the next step.
+        #              Use for non-critical steps (e.g., optional documentation).
+        #   "abort"  - Fails the entire session immediately.
+        #              Use for hard prerequisites (e.g., security validation).
+        # -------------------------------------------------------------------
+        on_fail: retry
+
+      - id: step-two
+        title: Second Step
+        instruction: >-
+          Continue building on step one's output. Reference what was produced
+          previously so the agent has context continuity.
+        acceptance_criteria:
+          - Output builds on the deliverables from step-one
+          - At least one concrete artifact is produced
+        # -------------------------------------------------------------------
+        # depends_on: list of step IDs within the SAME phase that must
+        # complete before this step can start. Used for topological ordering.
+        #
+        # Steps with no depends_on (and no mutual dependencies) can
+        # conceptually run in parallel within the phase.
+        #
+        # Examples:
+        #   depends_on:
+        #     - step-one              # simple linear dependency
+        #   depends_on:
+        #     - data-collection       # fan-in: this step needs both
+        #     - schema-validation     #   of these to finish first
+        # -------------------------------------------------------------------
+        depends_on:
+          - step-one
+        on_fail: retry
+
+  # -----------------------------------------------------------------------
+  # Phase 2
+  # -----------------------------------------------------------------------
+  - id: phase-two
+    name: Phase Two - Execution
+
+    steps:
+      - id: step-three
+        title: Third Step (Independent)
+        instruction: >-
+          This step has no depends_on, so it runs first in its phase.
+          Multiple steps without dependencies execute in declaration order
+          but are conceptually independent.
+        acceptance_criteria:
+          - Output addresses the step instruction directly
+        on_fail: skip  # Non-critical: skip if it fails
+
+      - id: step-four
+        title: Fourth Step (Depends on Third)
+        instruction: >-
+          Builds on step-three. If step-three was skipped, this step still
+          runs but may need to handle missing input gracefully.
+        acceptance_criteria:
+          - Integrates output from step-three where available
+          - Produces a self-contained deliverable even if prior step was skipped
+        depends_on:
+          - step-three
+        on_fail: abort  # Critical: abort session if this fails
+
+      # -------------------------------------------------------------------
+      # output_schema: optional JSON Schema object for Layer 1 validation.
+      # If provided, the submission's structure is checked deterministically
+      # BEFORE the LLM evaluator runs. This catches structural issues for
+      # free (no API call). Example:
+      #
+      # output_schema:
+      #   type: object
+      #   required:
+      #     - summary
+      #     - findings
+      #   properties:
+      #     summary:
+      #       type: string
+      #     findings:
+      #       type: array
+      #       items:
+      #         type: object
+      # -------------------------------------------------------------------

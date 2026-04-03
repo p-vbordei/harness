@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "harness": {
+      "command": "python",
+      "args": ["-m", "server.server"],
+      "cwd": "${CLAUDE_PLUGIN_ROOT}",
+      "env": {}
+    }
+  }
+}
