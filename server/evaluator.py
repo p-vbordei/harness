@@ -441,6 +441,7 @@ class AnthropicEvaluator:
         step_context: str = "",
         attempt: int = 1,
         max_attempts: int = 3,
+        profile_name: str = "default",
     ) -> EvaluationResult:
         if not acceptance_criteria:
             return EvaluationResult(
@@ -462,7 +463,7 @@ class AnthropicEvaluator:
                 messages=[{"role": "user", "content": user_prompt}],
             )
             raw = _extract_json(response.content[0].text)
-            return parse_evaluation_response(raw, attempt, max_attempts)
+            return parse_evaluation_response(raw, attempt, max_attempts, profile_name=profile_name)
         except Exception as exc:
             logger.error("Anthropic evaluation failed: %s", exc)
             return _error_result(str(exc), attempt, max_attempts)
@@ -496,6 +497,7 @@ class OpenAICompatibleEvaluator:
         step_context: str = "",
         attempt: int = 1,
         max_attempts: int = 3,
+        profile_name: str = "default",
     ) -> EvaluationResult:
         if not acceptance_criteria:
             return EvaluationResult(
@@ -519,7 +521,7 @@ class OpenAICompatibleEvaluator:
                 temperature=0.1,
             )
             raw = _extract_json(response.choices[0].message.content)
-            return parse_evaluation_response(raw, attempt, max_attempts)
+            return parse_evaluation_response(raw, attempt, max_attempts, profile_name=profile_name)
         except Exception as exc:
             logger.error("OpenAI-compatible evaluation failed: %s", exc)
             return _error_result(str(exc), attempt, max_attempts)

@@ -182,8 +182,12 @@ class SOPRegistry:
             if not directory.is_dir():
                 continue
             for path in sorted(directory.glob("*.yaml")):
+                if path.name.startswith("_"):
+                    continue  # Skip template/private files
                 self._load_file(path)
             for path in sorted(directory.glob("*.yml")):
+                if path.name.startswith("_"):
+                    continue
                 self._load_file(path)
 
     def _load_file(self, path: Path) -> None:

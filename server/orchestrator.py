@@ -33,6 +33,7 @@ from server.models import (
 )
 from server.session_manager import SessionManager
 from server.sop_registry import SOPRegistry
+from server.usage_tracker import UsageTracker
 from server.validation import validate_session_id, validate_sop_id, validate_submission
 
 logger = logging.getLogger(__name__)
@@ -48,10 +49,12 @@ class Orchestrator:
         sop_registry: SOPRegistry,
         session_manager: SessionManager,
         evaluator: Evaluator,
+        usage_tracker: Optional[UsageTracker] = None,
     ) -> None:
         self._sops = sop_registry
         self._sessions = session_manager
         self._evaluator = evaluator
+        self._usage = usage_tracker
 
     @property
     def is_subagent_mode(self) -> bool:
@@ -112,6 +115,12 @@ class Orchestrator:
         if session.steps:
             session.steps[0].status = StepStatus.IN_PROGRESS
         self._sessions.save_session(session)
+
+        # Track usage
+        if self._usage:
+            self._usage.start_session(session_id, sop_id)
+            if session.steps:
+                self._usage.start_step(session_id, session.steps[0].step_id)
 
         flat_steps = self._sops.flatten_steps(sop_id)
         steps_overview = [
@@ -211,6 +220,9 @@ class Orchestrator:
         current.attempts.append(attempt)
         self._sessions.save_session(session)
 
+        if self._usage:
+            self._usage.record_attempt(session_id, current.step_id)
+
         # Get acceptance criteria and previous attempts
         acceptance_criteria = sop_step.acceptance_criteria if sop_step else []
         previous_attempts = [
@@ -220,7 +232,8 @@ class Orchestrator:
         ]
 
         # Layer 2: Evaluate
-        eval_result = await self._evaluator.evaluate(
+        profile_name = sop_step.evaluator_profile if sop_step else "default"
+        eval_kwargs = dict(
             submission=step_output,
             acceptance_criteria=acceptance_criteria,
             previous_attempts=previous_attempts,
@@ -228,6 +241,10 @@ class Orchestrator:
             attempt=current.current_attempt,
             max_attempts=current.max_attempts,
         )
+        # SubagentEvaluator doesn't accept profile_name (it returns prompt only)
+        if not isinstance(self._evaluator, SubagentEvaluator):
+            eval_kwargs["profile_name"] = profile_name
+        eval_result = await self._evaluator.evaluate(**eval_kwargs)
 
         # Subagent mode: return prompt for external evaluation
         if isinstance(eval_result, dict) and eval_result.get("mode") == "subagent":
@@ -347,6 +364,9 @@ class Orchestrator:
             "weighted_score": evaluation.weighted_score,
             "evaluation_source": "subagent",
         })
+
+        if self._usage:
+            self._usage.record_evaluation(session_id, current.step_id, evaluation.verdict)
 
         # Get SOP step for failure handling
         flat_steps = self._sops.flatten_steps(session.sop_id)
@@ -568,6 +588,9 @@ class Orchestrator:
             "reason": reason,
         })
 
+        if self._usage:
+            self._usage.record_skip(session_id, current.step_id)
+
         if session.step_index >= session.step_total:
             session.stage = SessionStage.COMPLETED
             self._sessions.save_session(session)
@@ -649,6 +672,9 @@ class Orchestrator:
         next_step.status = StepStatus.IN_PROGRESS
         self._sessions.save_session(session)
 
+        if self._usage:
+            self._usage.start_step(session.session_id, next_step.step_id)
+
         flat_steps = self._sops.flatten_steps(session.sop_id)
         next_sop_step = flat_steps[session.step_index] if session.step_index < len(flat_steps) else None
 
@@ -714,6 +740,18 @@ class Orchestrator:
                 session.steps[session.step_index].status = StepStatus.IN_PROGRESS
             self._sessions.save_session(session)
 
+            # Build elicitation for the next step
+            elicitation = None
+            if session.step_index < session.step_total:
+                flat_steps = self._sops.flatten_steps(session.sop_id)
+                if session.step_index < len(flat_steps):
+                    next_sop = flat_steps[session.step_index]
+                    elicitation = {
+                        "message": f"Step {session.step_index + 1}/{session.step_total}: {next_sop.title}",
+                        "instruction": next_sop.instruction,
+                        "acceptance_criteria": next_sop.acceptance_criteria,
+                    }
+
             return HarnessResponse(
                 success=True,
                 message=f"Step skipped after {current.max_attempts} failed attempts.",
@@ -722,6 +760,7 @@ class Orchestrator:
                 step_index=session.step_index,
                 step_total=session.step_total,
                 data={"feedback": evaluation.to_dict(), "skipped": True},
+                elicitation=elicitation,
             )
 
         if on_fail == "abort":

@@ -19,8 +19,9 @@ from mcp.types import TextContent, Tool
 
 from server.evaluator import create_evaluator
 from server.orchestrator import Orchestrator
-from server.session_manager import SessionManager
+from server.session_manager import SessionManager, BASE_DIR
 from server.sop_registry import SOPRegistry
+from server.usage_tracker import UsageTracker
 
 logger = logging.getLogger(__name__)
 
@@ -223,7 +224,8 @@ def create_server() -> tuple[Server, Orchestrator]:
 
     sop_registry = SOPRegistry()
     session_manager = SessionManager()
-    orchestrator = Orchestrator(sop_registry, session_manager, evaluator)
+    usage_tracker = UsageTracker(BASE_DIR)
+    orchestrator = Orchestrator(sop_registry, session_manager, evaluator, usage_tracker)
 
     app = Server("harness")
 

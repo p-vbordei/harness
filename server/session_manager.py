@@ -210,9 +210,6 @@ class SessionManager:
                 state = self._recover_session_from_events_unlocked(session_id)
                 # Persist the recovered state so subsequent loads are fast
                 self._write_state(state)
-            self._append_event(session_id, "session_loaded", {
-                "session_id": session_id,
-            })
             return state
 
     def save_session(self, session_state: SessionState) -> None:
@@ -393,10 +390,10 @@ class SessionManager:
 
             elif etype == "step_evaluated":
                 sid = data.get("step_id", "")
-                passed = data.get("passed")
-                if sid and sid in steps_by_id and passed is not None:
+                verdict = data.get("verdict")
+                if sid and sid in steps_by_id and verdict is not None:
                     steps_by_id[sid].status = (
-                        StepStatus.PASSED if passed else StepStatus.FAILED
+                        StepStatus.PASSED if verdict == "PASS" else StepStatus.FAILED
                     )
 
             elif etype == "session_completed":
