@@ -10,7 +10,7 @@ from typing import Any, Optional
 
 import yaml
 
-from server.models import StepState, StepStatus
+from server.models import ExtractRequirement, StepState, StepStatus
 
 # ---------------------------------------------------------------------------
 # SOP dataclasses
@@ -22,7 +22,9 @@ class SOPStep:
     id: str
     title: str
     instruction: str
-    acceptance_criteria: list[str] = field(default_factory=list)
+    acceptance_criteria: list = field(default_factory=list)  # str or structured dict
+    extract_requirements: list[ExtractRequirement] = field(default_factory=list)
+    expected_output_format: Optional[dict[str, Any]] = None
     output_schema: Optional[dict[str, Any]] = None
     depends_on: list[str] = field(default_factory=list)
     on_fail: str = "retry"  # retry | skip | abort
@@ -46,6 +48,7 @@ class SOPDefinition:
     description: str = ""
     default_retry_limit: int = 3
     pass_threshold: float = 3.5
+    meta_criteria: list[str] = field(default_factory=list)
     phases: list[SOPPhase] = field(default_factory=list)
 
 
@@ -81,11 +84,27 @@ def _validate_step(raw: dict, phase_id: str) -> SOPStep:
         if timeout <= 0:
             raise ValueError(f"Step '{raw['id']}' has invalid timeout: {timeout}")
 
+    # Parse extract_requirements
+    extract_reqs = []
+    for req in raw.get("extract_requirements", []):
+        if isinstance(req, str):
+            extract_reqs.append(ExtractRequirement(field=req))
+        elif isinstance(req, dict):
+            extract_reqs.append(ExtractRequirement(
+                field=req["field"],
+                type=req.get("type", "any"),
+                min_items=req.get("min_items"),
+                min_length=req.get("min_length"),
+                max_length=req.get("max_length"),
+            ))
+
     return SOPStep(
         id=raw["id"],
         title=raw["title"],
         instruction=raw["instruction"],
         acceptance_criteria=raw.get("acceptance_criteria", []),
+        extract_requirements=extract_reqs,
+        expected_output_format=raw.get("expected_output_format"),
         output_schema=raw.get("output_schema"),
         depends_on=raw.get("depends_on", []),
         on_fail=on_fail,
@@ -117,6 +136,7 @@ def _validate_sop(raw: dict, source: str) -> SOPDefinition:
         description=raw.get("description", ""),
         default_retry_limit=raw.get("default_retry_limit", 3),
         pass_threshold=raw.get("pass_threshold", 3.5),
+        meta_criteria=raw.get("meta_criteria", []),
         phases=phases,
     )
 

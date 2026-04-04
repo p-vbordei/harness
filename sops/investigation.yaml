@@ -8,6 +8,18 @@ description: >-
 default_retry_limit: 3
 pass_threshold: 3.5
 
+meta_criteria:
+  - id: evidence-chain-integrity
+    description: "Every finding is backed by verifiable evidence with a clear chain from observation to conclusion"
+    rule:
+      type: llm
+      prompt: "Can every vulnerability finding be traced back to specific, reproducible evidence, with no conclusions drawn without supporting data?"
+  - id: actionable-remediation
+    description: "Report provides concrete, prioritized remediation steps that a team can execute immediately"
+    rule:
+      type: llm
+      prompt: "Are all remediation recommendations specific enough that a developer or ops team could act on them without needing to ask clarifying questions?"
+
 phases:
   # -----------------------------------------------------------------------
   # Phase 1: Reconnaissance
@@ -24,11 +36,65 @@ phases:
           explicitly excluded. List known constraints such as access
           limitations, time windows, or legal boundaries. Establish the
           investigation objective in one clear sentence.
+        extract_requirements:
+          - field: objective
+            type: string
+            min_length: 10
+          - field: target_assets
+            type: array
+            min_items: 1
+          - field: in_scope
+            type: array
+            min_items: 1
+          - field: out_of_scope
+            type: array
+            min_items: 1
+          - field: constraints
+            type: array
+        expected_output_format:
+          objective: "Assess the external attack surface of the staging environment for exploitable vulnerabilities"
+          target_assets:
+            - identifier: "staging.example.com"
+              type: "web application"
+            - identifier: "api.staging.example.com"
+              type: "API server"
+          in_scope:
+            - "staging.example.com and all subdomains"
+          out_of_scope:
+            - "production environment"
+            - "third-party SaaS integrations"
+          constraints:
+            - "No destructive testing"
+            - "Testing window: business hours only"
         acceptance_criteria:
-          - Investigation objective is stated in one sentence
-          - Target systems and assets are listed with identifiers (hostnames, URLs, repos, etc.)
-          - In-scope and out-of-scope boundaries are explicitly documented
-          - Known constraints and limitations are listed
+          - id: objective-stated
+            description: "Investigation objective is stated in one sentence"
+            rule:
+              type: exists
+              field: objective
+          - id: targets-listed
+            description: "Target systems and assets are listed with identifiers (hostnames, URLs, repos, etc.)"
+            rule:
+              type: each_has_fields
+              field: target_assets
+              required: [identifier, type]
+          - id: scope-boundaries
+            description: "In-scope and out-of-scope boundaries are explicitly documented"
+            rule:
+              type: count
+              field: in_scope
+              min: 1
+          - id: out-of-scope-documented
+            description: "Out-of-scope items are explicitly documented"
+            rule:
+              type: count
+              field: out_of_scope
+              min: 1
+          - id: constraints-listed
+            description: "Known constraints and limitations are listed"
+            rule:
+              type: exists
+              field: constraints
         on_fail: retry
 
       - id: info-gathering
@@ -39,11 +105,46 @@ phases:
           configurations. Gather publicly available data such as DNS records,
           certificate details, technology fingerprints, or code repository
           metadata. Organize findings by target asset.
+        extract_requirements:
+          - field: findings_by_asset
+            type: array
+            min_items: 1
+        expected_output_format:
+          findings_by_asset:
+            - asset: "staging.example.com"
+              data_points:
+                - type: "technology"
+                  value: "nginx/1.24.0"
+                  source: "HTTP response headers"
+                - type: "certificate"
+                  value: "Let's Encrypt, expires 2026-06-01"
+                  source: "TLS handshake"
+                - type: "dns"
+                  value: "A record -> 10.0.1.5"
+                  source: "DNS lookup"
         acceptance_criteria:
-          - Each in-scope asset has at least one data point collected
-          - Findings are organized by asset, not presented as a flat list
-          - Sources of information are cited for each finding
-          - Technology versions and configurations are recorded where observable
+          - id: data-per-asset
+            description: "Each in-scope asset has at least one data point collected"
+            rule:
+              type: each_has_fields
+              field: findings_by_asset
+              required: [asset, data_points]
+          - id: organized-by-asset
+            description: "Findings are organized by asset, not presented as a flat list"
+            rule:
+              type: count
+              field: findings_by_asset
+              min: 1
+          - id: sources-cited
+            description: "Sources of information are cited for each finding"
+            rule:
+              type: llm
+              prompt: "Does every data point include a source citation explaining where the information was obtained?"
+          - id: versions-recorded
+            description: "Technology versions and configurations are recorded where observable"
+            rule:
+              type: llm
+              prompt: "Are technology versions, software names, and configuration details recorded for each asset where they could be observed?"
         depends_on:
           - scope-definition
         on_fail: retry
@@ -64,11 +165,45 @@ phases:
           vendor advisories). Classify each finding by type (e.g., injection,
           misconfiguration, outdated dependency, broken access control).
           Assign a preliminary severity using CVSS or a comparable framework.
+        extract_requirements:
+          - field: vulnerabilities
+            type: array
+          - field: false_positives
+            type: array
+        expected_output_format:
+          vulnerabilities:
+            - id: "VULN-001"
+              type: "outdated dependency"
+              description: "nginx 1.24.0 vulnerable to CVE-2024-XXXX"
+              severity: "high"
+              cvss_score: 7.5
+              references: ["CVE-2024-XXXX", "https://nvd.nist.gov/..."]
+          false_positives:
+            - description: "OpenSSH version flagged but patched by vendor"
+              reasoning: "Backported security fix confirmed via package version"
         acceptance_criteria:
-          - Each identified vulnerability has a type classification
-          - Severity is assigned using CVSS score or High/Medium/Low with justification
-          - At least one CVE or advisory reference is cited where applicable
-          - False positives are called out with reasoning for exclusion
+          - id: type-classified
+            description: "Each identified vulnerability has a type classification"
+            rule:
+              type: each_has_fields
+              field: vulnerabilities
+              required: [type, severity]
+          - id: severity-justified
+            description: "Severity is assigned using CVSS score or High/Medium/Low with justification"
+            rule:
+              type: each_has_fields
+              field: vulnerabilities
+              required: [severity]
+          - id: references-cited
+            description: "At least one CVE or advisory reference is cited where applicable"
+            rule:
+              type: llm
+              prompt: "Do vulnerability findings reference specific CVEs, vendor advisories, or vulnerability database entries where applicable?"
+          - id: false-positives-documented
+            description: "False positives are called out with reasoning for exclusion"
+            rule:
+              type: exists
+              field: false_positives
         on_fail: retry
 
       - id: impact-analysis
@@ -79,11 +214,43 @@ phases:
           service disruption, lateral movement potential, and regulatory
           implications. Map vulnerabilities to the CIA triad (confidentiality,
           integrity, availability) and estimate blast radius.
+        extract_requirements:
+          - field: impact_assessments
+            type: array
+            min_items: 1
+        expected_output_format:
+          impact_assessments:
+            - vulnerability_id: "VULN-001"
+              cia_impact:
+                confidentiality: "high"
+                integrity: "low"
+                availability: "medium"
+              business_impact: "PII of ~10,000 users could be exposed"
+              blast_radius: "single service"
+              regulatory: ["GDPR Article 33 notification required"]
         acceptance_criteria:
-          - Each vulnerability is mapped to at least one CIA triad dimension
-          - Business impact is described in concrete terms (e.g., "PII of N users exposed")
-          - Blast radius is estimated (single service, network segment, full environment)
-          - Regulatory implications are noted where relevant (GDPR, HIPAA, PCI-DSS, etc.)
+          - id: cia-mapped
+            description: "Each vulnerability is mapped to at least one CIA triad dimension"
+            rule:
+              type: each_has_fields
+              field: impact_assessments
+              required: [vulnerability_id, cia_impact]
+          - id: concrete-business-impact
+            description: "Business impact is described in concrete terms"
+            rule:
+              type: llm
+              prompt: "Is each business impact described in concrete, specific terms (e.g., 'PII of N users exposed', 'service downtime of X hours') rather than vague statements like 'significant impact'?"
+          - id: blast-radius-estimated
+            description: "Blast radius is estimated (single service, network segment, full environment)"
+            rule:
+              type: each_has_fields
+              field: impact_assessments
+              required: [blast_radius]
+          - id: regulatory-noted
+            description: "Regulatory implications are noted where relevant"
+            rule:
+              type: llm
+              prompt: "Are regulatory implications (GDPR, HIPAA, PCI-DSS, SOC2) noted for vulnerabilities that could trigger compliance obligations?"
         depends_on:
           - vuln-assessment
         on_fail: retry
@@ -99,12 +266,48 @@ phases:
           explanation of what it demonstrates. Evidence must be reproducible
           -- another investigator should be able to verify each finding
           using the documented steps.
+        extract_requirements:
+          - field: evidence_by_vulnerability
+            type: array
+            min_items: 1
+        expected_output_format:
+          evidence_by_vulnerability:
+            - vulnerability_id: "VULN-001"
+              evidence:
+                - raw_data: "HTTP/1.1 200 OK\nServer: nginx/1.24.0"
+                  source_location: "Response headers from staging.example.com"
+                  explanation: "Server header discloses vulnerable nginx version"
+                  reproduction_steps:
+                    - "curl -I https://staging.example.com"
+                    - "Observe Server header in response"
         acceptance_criteria:
-          - Every identified vulnerability has at least one piece of supporting evidence
-          - Each evidence item includes raw data, source location, and explanation
-          - Reproduction steps are documented so another investigator can verify independently
-          - Evidence is organized by vulnerability, not by collection method
-          - No evidence relies solely on tool output without human interpretation
+          - id: evidence-per-vuln
+            description: "Every identified vulnerability has at least one piece of supporting evidence"
+            rule:
+              type: each_has_fields
+              field: evidence_by_vulnerability
+              required: [vulnerability_id, evidence]
+          - id: evidence-fields-complete
+            description: "Each evidence item includes raw data, source location, and explanation"
+            rule:
+              type: llm
+              prompt: "Does every evidence item include all three required components: raw observation data, source location or timestamp, and an explanation of what it demonstrates?"
+          - id: reproduction-steps
+            description: "Reproduction steps are documented so another investigator can verify independently"
+            rule:
+              type: llm
+              prompt: "Are reproduction steps detailed enough that another investigator, unfamiliar with this assessment, could independently verify each finding?"
+          - id: organized-by-vuln
+            description: "Evidence is organized by vulnerability, not by collection method"
+            rule:
+              type: count
+              field: evidence_by_vulnerability
+              min: 1
+          - id: human-interpretation
+            description: "No evidence relies solely on tool output without human interpretation"
+            rule:
+              type: llm
+              prompt: "Does each piece of evidence include human analysis and interpretation, rather than just raw tool output without context?"
         depends_on:
           - vuln-assessment
         on_fail: abort
@@ -125,12 +328,58 @@ phases:
           (critical first). Include an executive summary (3-5 sentences)
           suitable for a non-technical audience. End with a risk matrix
           or summary table.
+        extract_requirements:
+          - field: executive_summary
+            type: string
+            min_length: 50
+          - field: findings
+            type: array
+            min_items: 1
+          - field: summary_table
+            type: array
+            min_items: 1
+        expected_output_format:
+          executive_summary: "The assessment identified 3 vulnerabilities in the staging environment. One critical issue allows unauthorized access to user data. Two medium issues involve outdated software components. Immediate remediation is recommended for the critical finding."
+          findings:
+            - title: "Unauthorized Data Access via API"
+              severity: "critical"
+              affected_assets: ["api.staging.example.com"]
+              description: "The /api/users endpoint returns full user records without authentication"
+              evidence_summary: "Unauthenticated curl request returned 200 with user PII"
+              impact: "Full PII exposure for all users"
+          summary_table:
+            - severity: "critical"
+              count: 1
+            - severity: "medium"
+              count: 2
         acceptance_criteria:
-          - Executive summary is 3-5 sentences and avoids technical jargon
-          - Each finding includes title, severity, affected assets, description, evidence, and impact
-          - Findings are ordered by severity (critical first)
-          - A summary table or risk matrix is included
-          - Report is self-contained -- a reader does not need external context
+          - id: exec-summary-quality
+            description: "Executive summary is 3-5 sentences and avoids technical jargon"
+            rule:
+              type: llm
+              prompt: "Is the executive summary 3-5 sentences long and written in plain language that a non-technical executive could understand, avoiding acronyms and technical jargon?"
+          - id: finding-fields-complete
+            description: "Each finding includes title, severity, affected assets, description, evidence, and impact"
+            rule:
+              type: each_has_fields
+              field: findings
+              required: [title, severity, affected_assets, description, evidence_summary, impact]
+          - id: severity-ordering
+            description: "Findings are ordered by severity (critical first)"
+            rule:
+              type: llm
+              prompt: "Are the findings ordered by severity with critical findings first, then high, medium, and low?"
+          - id: summary-table-present
+            description: "A summary table or risk matrix is included"
+            rule:
+              type: count
+              field: summary_table
+              min: 1
+          - id: self-contained
+            description: "Report is self-contained -- a reader does not need external context"
+            rule:
+              type: llm
+              prompt: "Is the report self-contained so that a reader who was not involved in the investigation can understand all findings without needing additional context?"
         on_fail: retry
 
       - id: remediation-recommendations
@@ -142,12 +391,58 @@ phases:
           relative to other fixes, and any dependencies between
           remediations. Group recommendations into immediate (< 24 hours),
           short-term (< 1 week), and long-term (> 1 week) categories.
+        extract_requirements:
+          - field: recommendations
+            type: array
+            min_items: 1
+          - field: immediate
+            type: array
+          - field: short_term
+            type: array
+          - field: long_term
+            type: array
+        expected_output_format:
+          recommendations:
+            - finding_title: "Unauthorized Data Access via API"
+              fix: "Add authentication middleware to /api/users endpoint"
+              effort: "4 hours"
+              priority: "P0"
+              depends_on: []
+          immediate:
+            - "Add authentication middleware to /api/users"
+          short_term:
+            - "Upgrade nginx to 1.26.x"
+          long_term:
+            - "Implement API gateway with centralized auth"
         acceptance_criteria:
-          - Every finding has a corresponding remediation recommendation
-          - Each recommendation specifies the concrete fix, not just "fix the issue"
-          - Effort estimates are provided for each recommendation
-          - Recommendations are grouped into immediate, short-term, and long-term
-          - Dependencies between remediations are identified where they exist
+          - id: recommendation-per-finding
+            description: "Every finding has a corresponding remediation recommendation"
+            rule:
+              type: count
+              field: recommendations
+              min: 1
+          - id: concrete-fix
+            description: "Each recommendation specifies the concrete fix, not just 'fix the issue'"
+            rule:
+              type: each_has_fields
+              field: recommendations
+              required: [finding_title, fix, effort]
+          - id: effort-estimates
+            description: "Effort estimates are provided for each recommendation"
+            rule:
+              type: each_has_fields
+              field: recommendations
+              required: [effort]
+          - id: time-grouped
+            description: "Recommendations are grouped into immediate, short-term, and long-term"
+            rule:
+              type: llm
+              prompt: "Are the recommendations clearly grouped into three time categories: immediate (< 24 hours), short-term (< 1 week), and long-term (> 1 week)?"
+          - id: dependencies-identified
+            description: "Dependencies between remediations are identified where they exist"
+            rule:
+              type: llm
+              prompt: "Are dependencies between remediation steps identified, so the team knows which fixes must be applied before others?"
         depends_on:
           - findings-report
         on_fail: retry

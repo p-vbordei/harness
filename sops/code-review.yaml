@@ -8,6 +8,18 @@ description: >-
 default_retry_limit: 3
 pass_threshold: 3.5
 
+meta_criteria:
+  - id: comprehensive-coverage
+    description: "All four review dimensions (security, performance, quality, accessibility) are meaningfully addressed"
+    rule:
+      type: llm
+      prompt: "Were all four analysis dimensions -- security, performance, quality, and accessibility -- substantively reviewed rather than superficially checked off?"
+  - id: actionable-output
+    description: "Every blocker and warning has a specific, implementable fix recommendation"
+    rule:
+      type: llm
+      prompt: "Can the original author take the fix recommendations and implement every blocker and warning fix without needing to ask clarifying questions?"
+
 phases:
   # -----------------------------------------------------------------------
   # Phase 1: Setup
@@ -26,11 +38,54 @@ phases:
           one paragraph. Flag any files that are unusually large diffs
           (> 300 lines changed) or that touch critical paths (auth,
           payments, data models, infrastructure).
+        extract_requirements:
+          - field: changed_files
+            type: array
+            min_items: 1
+          - field: languages
+            type: array
+            min_items: 1
+          - field: intent_summary
+            type: string
+            min_length: 20
+          - field: flagged_files
+            type: array
+        expected_output_format:
+          changed_files:
+            - path: "src/auth/login.ts"
+              change_type: "modified"
+              lines_changed: 45
+            - path: "src/models/user.ts"
+              change_type: "new"
+              lines_changed: 120
+          languages: ["TypeScript", "SQL"]
+          intent_summary: "Adds a user preferences feature with new API endpoint and database migration."
+          flagged_files:
+            - path: "src/auth/login.ts"
+              reason: "critical path: authentication"
         acceptance_criteria:
-          - All changed files are listed with their change type (new/modified/deleted/renamed)
-          - Languages and frameworks involved are identified
-          - Intent of the change is summarized in one paragraph
-          - Files with large diffs or critical-path changes are flagged
+          - id: files-categorized
+            description: "All changed files are listed with their change type (new/modified/deleted/renamed)"
+            rule:
+              type: each_has_fields
+              field: changed_files
+              required: [path, change_type]
+          - id: languages-identified
+            description: "Languages and frameworks involved are identified"
+            rule:
+              type: count
+              field: languages
+              min: 1
+          - id: intent-summarized
+            description: "Intent of the change is summarized in one paragraph"
+            rule:
+              type: exists
+              field: intent_summary
+          - id: critical-files-flagged
+            description: "Files with large diffs or critical-path changes are flagged"
+            rule:
+              type: exists
+              field: flagged_files
         on_fail: retry
 
   # -----------------------------------------------------------------------
@@ -54,12 +109,67 @@ phases:
           PII, tokens in code or logs), insecure deserialization, missing
           input validation, and unsafe dependency additions. For each
           finding, cite the file and line number.
+        extract_requirements:
+          - field: categories_reviewed
+            type: array
+            min_items: 6
+          - field: findings
+            type: array
+          - field: dependencies_checked
+            type: array
+        expected_output_format:
+          categories_reviewed:
+            - category: "injection"
+              status: "no issues found"
+            - category: "authentication"
+              status: "no issues found"
+            - category: "sensitive data exposure"
+              status: "1 finding"
+            - category: "insecure deserialization"
+              status: "no issues found"
+            - category: "input validation"
+              status: "1 finding"
+            - category: "unsafe dependencies"
+              status: "no issues found"
+          findings:
+            - file: "src/api/handler.ts"
+              line: 42
+              severity: "high"
+              category: "input validation"
+              description: "User input passed directly to database query without sanitization"
+          dependencies_checked:
+            - name: "lodash@4.17.21"
+              status: "no known vulnerabilities"
         acceptance_criteria:
-          - Each of the OWASP categories listed in the instruction is explicitly addressed
-          - Findings include file path and line number
-          - Severity is assigned to each finding (critical/high/medium/low)
-          - If no issues are found in a category, it is marked as reviewed with "no issues found"
-          - New dependencies are checked against known vulnerability databases
+          - id: owasp-categories-addressed
+            description: "Each of the OWASP categories listed in the instruction is explicitly addressed"
+            rule:
+              type: count
+              field: categories_reviewed
+              min: 6
+          - id: findings-have-location
+            description: "Findings include file path and line number"
+            rule:
+              type: each_has_fields
+              field: findings
+              required: [file, line, severity]
+          - id: severity-assigned
+            description: "Severity is assigned to each finding (critical/high/medium/low)"
+            rule:
+              type: each_has_fields
+              field: findings
+              required: [severity]
+          - id: clean-categories-marked
+            description: "If no issues are found in a category, it is marked as reviewed with 'no issues found'"
+            rule:
+              type: each_has_fields
+              field: categories_reviewed
+              required: [category, status]
+          - id: deps-checked
+            description: "New dependencies are checked against known vulnerability databases"
+            rule:
+              type: exists
+              field: dependencies_checked
         on_fail: abort
 
       - id: performance-review
@@ -71,11 +181,53 @@ phases:
           missing pagination, synchronous blocking in async contexts, and
           unnecessary network calls. Consider both average-case and
           worst-case performance.
+        extract_requirements:
+          - field: performance_checks
+            type: array
+            min_items: 4
+          - field: findings
+            type: array
+        expected_output_format:
+          performance_checks:
+            - area: "database queries"
+              status: "1 concern"
+              details: "New query on users table lacks index for preferences column"
+            - area: "memory/CPU"
+              status: "acceptable"
+              details: "No unbounded loops or large allocations detected"
+            - area: "async boundaries"
+              status: "acceptable"
+              details: "All async operations properly awaited"
+            - area: "network calls"
+              status: "acceptable"
+              details: "No unnecessary network round-trips"
+          findings:
+            - area: "database queries"
+              severity: "warning"
+              description: "Missing index on users.preferences for new filter query"
+              file: "src/models/user.ts"
         acceptance_criteria:
-          - Database query patterns are analyzed (N+1, missing indexes, unbounded results)
-          - Memory and CPU concerns are addressed (large allocations, unbounded loops)
-          - Async/sync boundary issues are checked
-          - At least one performance consideration is raised or explicitly marked as acceptable
+          - id: query-patterns-analyzed
+            description: "Database query patterns are analyzed (N+1, missing indexes, unbounded results)"
+            rule:
+              type: llm
+              prompt: "Were database query patterns specifically analyzed for N+1 issues, missing indexes, and unbounded result sets?"
+          - id: memory-cpu-addressed
+            description: "Memory and CPU concerns are addressed (large allocations, unbounded loops)"
+            rule:
+              type: llm
+              prompt: "Were memory usage and CPU-intensive operations reviewed for large allocations and unbounded loops?"
+          - id: async-boundaries-checked
+            description: "Async/sync boundary issues are checked"
+            rule:
+              type: llm
+              prompt: "Were async/sync boundaries reviewed for blocking operations in async contexts and proper await usage?"
+          - id: at-least-one-consideration
+            description: "At least one performance consideration is raised or explicitly marked as acceptable"
+            rule:
+              type: count
+              field: performance_checks
+              min: 1
         on_fail: retry
 
       - id: quality-review
@@ -86,12 +238,61 @@ phases:
           proper error handling and propagation, test coverage for new
           logic, adherence to project conventions, dead code or commented-out
           blocks, and TODO/FIXME/HACK comments without tracking issues.
+        extract_requirements:
+          - field: quality_checks
+            type: array
+            min_items: 5
+          - field: findings
+            type: array
+        expected_output_format:
+          quality_checks:
+            - area: "naming"
+              status: "acceptable"
+            - area: "function complexity"
+              status: "1 finding"
+            - area: "duplication"
+              status: "acceptable"
+            - area: "error handling"
+              status: "acceptable"
+            - area: "dead code / TODOs"
+              status: "1 finding"
+          findings:
+            - area: "function complexity"
+              severity: "warning"
+              description: "processUserPreferences() is 65 lines with cyclomatic complexity of 12"
+              file: "src/core/preferences.ts"
+              line: 15
+            - area: "dead code / TODOs"
+              severity: "suggestion"
+              description: "TODO on line 88 has no tracking issue"
+              file: "src/core/preferences.ts"
+              line: 88
         acceptance_criteria:
-          - Naming conventions are evaluated against project standards
-          - Functions exceeding 40 lines or high cyclomatic complexity are flagged
-          - Duplication with existing codebase is checked
-          - Error handling patterns are reviewed (no silent swallows, proper propagation)
-          - Untracked TODOs or dead code are identified
+          - id: naming-evaluated
+            description: "Naming conventions are evaluated against project standards"
+            rule:
+              type: llm
+              prompt: "Were variable, function, and class names evaluated for clarity and consistency with the project's existing naming conventions?"
+          - id: complexity-flagged
+            description: "Functions exceeding 40 lines or high cyclomatic complexity are flagged"
+            rule:
+              type: llm
+              prompt: "Were functions checked for excessive length (over 40 lines) or high cyclomatic complexity, and any violations flagged?"
+          - id: duplication-checked
+            description: "Duplication with existing codebase is checked"
+            rule:
+              type: llm
+              prompt: "Was the new code checked for duplication against the existing codebase, and any significant copy-paste patterns identified?"
+          - id: error-handling-reviewed
+            description: "Error handling patterns are reviewed (no silent swallows, proper propagation)"
+            rule:
+              type: llm
+              prompt: "Were error handling patterns reviewed to ensure no silent swallowing of errors and proper error propagation?"
+          - id: dead-code-identified
+            description: "Untracked TODOs or dead code are identified"
+            rule:
+              type: llm
+              prompt: "Were TODO/FIXME/HACK comments without tracking issues and dead or commented-out code blocks identified?"
         on_fail: retry
 
       - id: accessibility-review
@@ -104,11 +305,51 @@ phases:
           changeset has no UI components, document that and note any
           API-level accessibility concerns (e.g., error message clarity for
           assistive technology consumers).
+        extract_requirements:
+          - field: has_ui_changes
+            type: string
+          - field: accessibility_checks
+            type: array
+          - field: findings
+            type: array
+        expected_output_format:
+          has_ui_changes: "yes"
+          accessibility_checks:
+            - area: "semantic HTML"
+              status: "acceptable"
+            - area: "ARIA attributes"
+              status: "1 finding"
+            - area: "keyboard navigation"
+              status: "acceptable"
+            - area: "color contrast"
+              status: "acceptable"
+          findings:
+            - area: "ARIA attributes"
+              severity: "warning"
+              description: "Custom dropdown missing aria-expanded attribute"
+              file: "src/components/PreferencesDropdown.tsx"
+              line: 22
         acceptance_criteria:
-          - Semantic HTML and ARIA usage are evaluated for all UI changes
-          - Keyboard navigation impact is assessed
-          - Color contrast and visual accessibility are checked
-          - If no UI changes exist, this is explicitly stated with justification for marking complete
+          - id: semantic-html-evaluated
+            description: "Semantic HTML and ARIA usage are evaluated for all UI changes"
+            rule:
+              type: llm
+              prompt: "Were semantic HTML elements and ARIA attributes evaluated for all UI components in the changeset?"
+          - id: keyboard-nav-assessed
+            description: "Keyboard navigation impact is assessed"
+            rule:
+              type: llm
+              prompt: "Was keyboard navigation support assessed, including tab order and focus management for interactive elements?"
+          - id: visual-accessibility-checked
+            description: "Color contrast and visual accessibility are checked"
+            rule:
+              type: llm
+              prompt: "Were color contrast ratios and other visual accessibility concerns (font size, spacing) evaluated?"
+          - id: no-ui-justified
+            description: "If no UI changes exist, this is explicitly stated with justification for marking complete"
+            rule:
+              type: exists
+              field: has_ui_changes
         on_fail: skip
 
   # -----------------------------------------------------------------------
@@ -126,12 +367,58 @@ phases:
           reviews. Assign a final severity to each unique finding. Order
           by severity (blockers first, then warnings, then suggestions).
           Include a summary count: N blockers, N warnings, N suggestions.
+        extract_requirements:
+          - field: consolidated_findings
+            type: array
+          - field: summary_counts
+            type: object
+        expected_output_format:
+          consolidated_findings:
+            - id: "F-001"
+              title: "Unsanitized user input in database query"
+              source_reviews: ["security", "quality"]
+              final_severity: "blocker"
+              file: "src/api/handler.ts"
+              line: 42
+              description: "User input passed to query without parameterization"
+            - id: "F-002"
+              title: "Missing database index"
+              source_reviews: ["performance"]
+              final_severity: "warning"
+              file: "src/models/user.ts"
+              description: "New filter query on preferences column lacks index"
+          summary_counts:
+            blockers: 1
+            warnings: 2
+            suggestions: 1
         acceptance_criteria:
-          - All findings from security, performance, quality, and accessibility reviews are included
-          - Duplicate findings are merged with the higher severity retained
-          - Each finding has a final severity (blocker/warning/suggestion)
-          - Summary count of blockers, warnings, and suggestions is provided
-          - Findings are ordered by severity
+          - id: all-reviews-included
+            description: "All findings from security, performance, quality, and accessibility reviews are included"
+            rule:
+              type: llm
+              prompt: "Does the consolidated report include findings from all four review dimensions (security, performance, quality, accessibility), not just a subset?"
+          - id: duplicates-merged
+            description: "Duplicate findings are merged with the higher severity retained"
+            rule:
+              type: llm
+              prompt: "Were findings that appeared in multiple reviews deduplicated, keeping the higher severity assignment?"
+          - id: final-severity-assigned
+            description: "Each finding has a final severity (blocker/warning/suggestion)"
+            rule:
+              type: each_has_fields
+              field: consolidated_findings
+              required: [title, final_severity]
+          - id: summary-counts-present
+            description: "Summary count of blockers, warnings, and suggestions is provided"
+            rule:
+              type: each_has_fields
+              field: summary_counts
+              required: [blockers, warnings, suggestions]
+          - id: severity-ordered
+            description: "Findings are ordered by severity"
+            rule:
+              type: llm
+              prompt: "Are the consolidated findings ordered by severity with blockers first, then warnings, then suggestions?"
         on_fail: retry
 
       - id: fix-recommendations
@@ -143,11 +430,58 @@ phases:
           suggestions, a one-sentence recommendation is sufficient. Group
           fixes by priority: must-fix-before-merge, should-fix-before-merge,
           and consider-for-follow-up.
+        extract_requirements:
+          - field: fix_recommendations
+            type: array
+            min_items: 1
+          - field: must_fix
+            type: array
+          - field: should_fix
+            type: array
+          - field: follow_up
+            type: array
+        expected_output_format:
+          fix_recommendations:
+            - finding_id: "F-001"
+              what: "Use parameterized query instead of string concatenation"
+              where:
+                file: "src/api/handler.ts"
+                function: "getUsers"
+              code_example: "db.query('SELECT * FROM users WHERE id = $1', [userId])"
+            - finding_id: "F-002"
+              what: "Add index on users.preferences column"
+              where:
+                file: "migrations/002_add_preferences_index.sql"
+                function: null
+              code_example: "CREATE INDEX idx_users_preferences ON users USING gin(preferences);"
+          must_fix:
+            - "F-001: Parameterize database query in getUsers"
+          should_fix:
+            - "F-002: Add preferences column index"
+          follow_up:
+            - "F-003: Consider splitting processUserPreferences into smaller functions"
         acceptance_criteria:
-          - Every blocker and warning has a fix recommendation with file/function reference
-          - At least one code example or pseudocode snippet is included for a non-trivial fix
-          - Fixes are grouped into must-fix, should-fix, and follow-up categories
-          - Recommendations are actionable by the original author without additional context
+          - id: blockers-have-fixes
+            description: "Every blocker and warning has a fix recommendation with file/function reference"
+            rule:
+              type: each_has_fields
+              field: fix_recommendations
+              required: [finding_id, what, where]
+          - id: code-example-included
+            description: "At least one code example or pseudocode snippet is included for a non-trivial fix"
+            rule:
+              type: llm
+              prompt: "Is at least one fix recommendation accompanied by a concrete code example or pseudocode snippet showing the proposed change?"
+          - id: priority-grouped
+            description: "Fixes are grouped into must-fix, should-fix, and follow-up categories"
+            rule:
+              type: exists
+              field: must_fix
+          - id: actionable-recommendations
+            description: "Recommendations are actionable by the original author without additional context"
+            rule:
+              type: llm
+              prompt: "Can the original code author implement each fix recommendation without needing to ask clarifying questions about what to change or where?"
         depends_on:
           - findings-consolidation
         on_fail: retry

@@ -37,6 +37,33 @@ class Artifact:
 
 
 @dataclass
+class ExtractRequirement:
+    """A required field in the step submission."""
+    field: str
+    type: str = "any"  # any, string, array, object, number
+    min_items: Optional[int] = None
+    min_length: Optional[int] = None
+    max_length: Optional[int] = None
+
+
+@dataclass
+class CriterionResult:
+    """Result of evaluating a single acceptance criterion."""
+    criterion_id: str
+    passed: bool
+    evidence: str = ""
+    gap: Optional[str] = None
+    rule_type: str = "llm"  # deterministic rule type or "llm"
+
+    def to_dict(self) -> dict:
+        d = {"criterion_id": self.criterion_id, "passed": self.passed, "evidence": self.evidence}
+        if self.gap:
+            d["gap"] = self.gap
+        d["rule_type"] = self.rule_type
+        return d
+
+
+@dataclass
 class DimensionScore:
     """Score for a single evaluation dimension."""
     score: int  # 1-5
@@ -50,6 +77,7 @@ class EvaluationResult:
     verdict: str  # "PASS" or "FAIL"
     weighted_score: float
     dimensions: dict[str, DimensionScore] = field(default_factory=dict)
+    criteria_results: list[CriterionResult] = field(default_factory=list)
     slop_flags: list[str] = field(default_factory=list)
     top_3_fixes: list[str] = field(default_factory=list)
     attempt: int = 1
@@ -63,6 +91,7 @@ class EvaluationResult:
                 k: {"score": v.score, "evidence": v.evidence, "gap": v.gap}
                 for k, v in self.dimensions.items()
             },
+            "criteria_results": [c.to_dict() for c in self.criteria_results],
             "slop_flags": self.slop_flags,
             "top_3_fixes": self.top_3_fixes,
             "attempt": self.attempt,

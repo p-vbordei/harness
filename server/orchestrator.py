@@ -22,6 +22,7 @@ from server.evaluator import (
     parse_evaluation_response,
     _error_result,
 )
+from server.rules import validate_extract_requirements, validate_criteria_rules
 from server.models import (
     EvaluationResult,
     HarnessResponse,
@@ -123,28 +124,21 @@ class Orchestrator:
                 self._usage.start_step(session_id, session.steps[0].step_id)
 
         flat_steps = self._sops.flatten_steps(sop_id)
-        steps_overview = [
-            {"index": i, "id": s.id, "title": s.title}
-            for i, s in enumerate(flat_steps)
-        ]
 
+        # Sequential enforcement: only reveal current step (no steps_overview)
         elicitation = None
         if flat_steps:
             first = flat_steps[0]
-            elicitation = {
-                "message": f"Step 1/{len(flat_steps)}: {first.title}",
-                "instruction": first.instruction,
-                "acceptance_criteria": first.acceptance_criteria,
-            }
+            elicitation = self._build_elicitation(first, 0, len(flat_steps), session.context)
 
         return HarnessResponse(
             success=True,
-            message=f"Session started for '{sop.name}'. Proceed with step 1.",
+            message=f"Session started for '{sop.name}'. Complete step 1 of {len(flat_steps)} to proceed.",
             session_id=session_id,
             stage="awaiting_step",
             step_index=0,
             step_total=len(step_states),
-            data={"sop_name": sop.name, "steps_overview": steps_overview},
+            data={"sop_name": sop.name},
             elicitation=elicitation,
         )
 
@@ -195,7 +189,7 @@ class Orchestrator:
         flat_steps = self._sops.flatten_steps(session.sop_id)
         sop_step = flat_steps[session.step_index] if session.step_index < len(flat_steps) else None
 
-        # Layer 1: Deterministic validation
+        # Layer 1a: Structural validation (existing)
         output_schema = sop_step.output_schema if sop_step else None
         validation = validate_submission(step_output, output_schema)
         if not validation.is_valid:
@@ -206,6 +200,35 @@ class Orchestrator:
                 step_index=session.step_index, step_total=session.step_total,
                 data={"errors": validation.errors},
             )
+
+        # Layer 1b: Rule engine (extract_requirements + deterministic criteria)
+        rule_results = []
+        llm_criteria = []
+        if sop_step:
+            if sop_step.extract_requirements:
+                rule_results.extend(
+                    validate_extract_requirements(step_output, sop_step.extract_requirements)
+                )
+            if sop_step.acceptance_criteria:
+                det_results, llm_crit = validate_criteria_rules(
+                    step_output, sop_step.acceptance_criteria,
+                )
+                rule_results.extend(det_results)
+                llm_criteria = llm_crit
+
+            # Fail fast if any deterministic rule failed
+            failed_rules = [r for r in rule_results if not r.passed]
+            if failed_rules:
+                return HarnessResponse(
+                    success=False,
+                    message=f"Submission failed {len(failed_rules)} deterministic check(s).",
+                    session_id=session_id, stage="awaiting_step",
+                    step_index=session.step_index, step_total=session.step_total,
+                    data={
+                        "failed_criteria": [r.to_dict() for r in failed_rules],
+                        "passed_criteria": [r.to_dict() for r in rule_results if r.passed],
+                    },
+                )
 
         # Record the attempt (increment counter)
         current.current_attempt += 1
@@ -289,7 +312,7 @@ class Orchestrator:
         })
 
         if eval_result.verdict == "PASS":
-            return self._advance_step(session, eval_result)
+            return self._advance_step(session, eval_result, step_output=step_output)
         else:
             return self._handle_failure(session, eval_result, sop_step)
 
@@ -373,7 +396,13 @@ class Orchestrator:
         sop_step = flat_steps[session.step_index] if session.step_index < len(flat_steps) else None
 
         if evaluation.verdict == "PASS":
-            return self._advance_step(session, evaluation)
+            # Reconstruct step_output from the last attempt for context persistence
+            last_attempt = current.attempts[-1] if current.attempts else None
+            reconstructed_output = {
+                "artifacts": last_attempt.artifacts if last_attempt else [],
+                "self_assessment": last_attempt.self_assessment if last_attempt else "",
+            }
+            return self._advance_step(session, evaluation, step_output=reconstructed_output)
         else:
             return self._handle_failure(session, evaluation, sop_step)
 
@@ -644,12 +673,66 @@ class Orchestrator:
     # Internal helpers
     # ------------------------------------------------------------------
 
+    def _build_elicitation(
+        self, sop_step: Any, step_index: int, step_total: int,
+        context: dict,
+    ) -> dict:
+        """Build elicitation for a step, resolving template variables."""
+        criteria_descriptions = []
+        for c in sop_step.acceptance_criteria:
+            if isinstance(c, str):
+                criteria_descriptions.append(c)
+            elif isinstance(c, dict):
+                criteria_descriptions.append(c.get("description", str(c)))
+
+        elicitation = {
+            "message": f"Step {step_index + 1}/{step_total}: {sop_step.title}",
+            "instruction": self._resolve_templates(sop_step.instruction, context),
+            "acceptance_criteria": [self._resolve_templates(c, context) for c in criteria_descriptions],
+        }
+        if sop_step.extract_requirements:
+            elicitation["required_fields"] = [
+                {"field": r.field, "type": r.type}
+                for r in sop_step.extract_requirements
+            ]
+        if sop_step.expected_output_format:
+            elicitation["expected_output_format"] = sop_step.expected_output_format
+        return elicitation
+
+    @staticmethod
+    def _resolve_templates(text: str, context: dict) -> str:
+        """Resolve {{step.<step_id>.<key>}} template variables."""
+        import re
+        step_outputs = context.get("step_outputs", {})
+
+        def replacer(match):
+            path = match.group(1)  # e.g., "step.requirements-analysis.user_stories"
+            parts = path.split(".", 2)
+            if len(parts) >= 3 and parts[0] == "step":
+                step_id, key = parts[1], parts[2]
+                step_data = step_outputs.get(step_id, {})
+                value = step_data.get(key)
+                if value is not None:
+                    if isinstance(value, (list, dict)):
+                        import json
+                        return json.dumps(value, indent=2)
+                    return str(value)
+            return match.group(0)  # Leave unresolved
+
+        return re.sub(r"\{\{(.+?)\}\}", replacer, text)
+
     def _advance_step(
-        self, session: SessionState, evaluation: EvaluationResult
+        self, session: SessionState, evaluation: EvaluationResult,
+        step_output: Optional[dict] = None,
     ) -> HarnessResponse:
         """Mark current step as passed and advance to next step or complete."""
         current = session.current_step
         current.status = StepStatus.PASSED
+
+        # Persist step output as accumulated knowledge for later steps
+        if step_output:
+            session.context.setdefault("step_outputs", {})[current.step_id] = step_output
+
         session.step_index += 1
 
         if session.step_index >= session.step_total:
@@ -680,11 +763,9 @@ class Orchestrator:
 
         elicitation = None
         if next_sop_step:
-            elicitation = {
-                "message": f"Step {session.step_index + 1}/{session.step_total}: {next_sop_step.title}",
-                "instruction": next_sop_step.instruction,
-                "acceptance_criteria": next_sop_step.acceptance_criteria,
-            }
+            elicitation = self._build_elicitation(
+                next_sop_step, session.step_index, session.step_total, session.context,
+            )
 
         return HarnessResponse(
             success=True,

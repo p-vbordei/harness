@@ -7,6 +7,18 @@ description: >-
 default_retry_limit: 3
 pass_threshold: 3.5
 
+meta_criteria:
+  - id: end-to-end-completeness
+    description: "Feature is fully implemented from requirements through documentation"
+    rule:
+      type: llm
+      prompt: "Does the completed work cover all phases from planning through review, with no major gaps in the implementation pipeline?"
+  - id: requirement-traceability
+    description: "Every requirement can be traced to implementation and tests"
+    rule:
+      type: llm
+      prompt: "Can each user story defined in planning be traced forward to specific implementation code and at least one test?"
+
 phases:
   # -----------------------------------------------------------------------
   # Phase 1: Planning
@@ -22,11 +34,59 @@ phases:
           performance budgets, compatibility requirements, or security
           considerations. Explicitly list items that are out of scope to
           prevent scope creep during implementation.
+        extract_requirements:
+          - field: user_stories
+            type: array
+            min_items: 1
+          - field: constraints
+            type: array
+            min_items: 1
+          - field: out_of_scope
+            type: array
+            min_items: 1
+        expected_output_format:
+          user_stories:
+            - as_a: "end user"
+              i_want: "to do X"
+              so_that: "I can achieve Y"
+              acceptance_criteria:
+                - "criterion 1"
+                - "criterion 2"
+          constraints:
+            - "performance: response time < 200ms"
+          out_of_scope:
+            - "admin dashboard changes"
         acceptance_criteria:
-          - At least one user story is defined with a clear "As a / I want / So that" structure
-          - Each user story has testable acceptance criteria
-          - Constraints and non-functional requirements are documented
-          - Out-of-scope items are explicitly listed
+          - id: user-story-structure
+            description: "At least one user story is defined with a clear 'As a / I want / So that' structure"
+            rule:
+              type: each_has_fields
+              field: user_stories
+              required: [as_a, i_want, so_that]
+          - id: user-story-count
+            description: "At least one user story is defined"
+            rule:
+              type: count
+              field: user_stories
+              min: 1
+          - id: testable-acceptance-criteria
+            description: "Each user story has testable acceptance criteria"
+            rule:
+              type: each_has_fields
+              field: user_stories
+              required: [acceptance_criteria]
+          - id: constraints-documented
+            description: "Constraints and non-functional requirements are documented"
+            rule:
+              type: count
+              field: constraints
+              min: 1
+          - id: out-of-scope-listed
+            description: "Out-of-scope items are explicitly listed"
+            rule:
+              type: count
+              field: out_of_scope
+              min: 1
         on_fail: retry
 
       - id: technical-design
@@ -38,11 +98,58 @@ phases:
           as new endpoints, modified request/response shapes, or changed
           authentication rules. Define a testing strategy that covers unit,
           integration, and manual verification levels.
+        extract_requirements:
+          - field: files_to_change
+            type: array
+            min_items: 1
+          - field: data_model_changes
+            type: array
+          - field: api_changes
+            type: array
+          - field: testing_strategy
+            type: object
+        expected_output_format:
+          files_to_change:
+            - path: "src/module/file.ts"
+              action: "modify"
+              reason: "Add new handler"
+          data_model_changes:
+            - entity: "User"
+              field: "preferences"
+              type: "jsonb"
+          api_changes:
+            - method: "POST"
+              path: "/api/v1/resource"
+              description: "Create new resource"
+          testing_strategy:
+            unit: ["core logic functions"]
+            integration: ["API endpoint round-trip"]
+            manual: ["UI walkthrough"]
         acceptance_criteria:
-          - List of files to create or modify is documented
-          - Data model changes are specified with field names and types
-          - API surface changes are described with endpoint paths and methods
-          - Testing strategy identifies what will be tested at each level
+          - id: files-listed
+            description: "List of files to create or modify is documented"
+            rule:
+              type: count
+              field: files_to_change
+              min: 1
+          - id: data-model-specified
+            description: "Data model changes are specified with field names and types"
+            rule:
+              type: each_has_fields
+              field: data_model_changes
+              required: [entity, field, type]
+          - id: api-surface-described
+            description: "API surface changes are described with endpoint paths and methods"
+            rule:
+              type: each_has_fields
+              field: api_changes
+              required: [method, path]
+          - id: testing-strategy-levels
+            description: "Testing strategy identifies what will be tested at each level"
+            rule:
+              type: each_has_fields
+              field: testing_strategy
+              required: [unit, integration, manual]
         depends_on:
           - requirements-analysis
         on_fail: retry
@@ -55,10 +162,42 @@ phases:
           independently. Identify dependencies between tasks so that work
           proceeds in a logical order and earlier tasks provide the foundation
           for later ones.
+        extract_requirements:
+          - field: tasks
+            type: array
+            min_items: 3
+        expected_output_format:
+          tasks:
+            - id: "task-1"
+              title: "Set up data model"
+              definition_of_done: "Migration runs, model passes validation"
+              depends_on: []
+            - id: "task-2"
+              title: "Implement core logic"
+              definition_of_done: "Unit tests pass for business rules"
+              depends_on: ["task-1"]
+            - id: "task-3"
+              title: "Wire up API endpoint"
+              definition_of_done: "Integration test passes"
+              depends_on: ["task-2"]
         acceptance_criteria:
-          - Task list contains at least three discrete tasks
-          - Each task has a clear definition of done
-          - Dependencies between tasks are identified and ordering is logical
+          - id: min-task-count
+            description: "Task list contains at least three discrete tasks"
+            rule:
+              type: count
+              field: tasks
+              min: 3
+          - id: tasks-have-done-criteria
+            description: "Each task has a clear definition of done"
+            rule:
+              type: each_has_fields
+              field: tasks
+              required: [title, definition_of_done]
+          - id: task-ordering-logical
+            description: "Dependencies between tasks are identified and ordering is logical"
+            rule:
+              type: llm
+              prompt: "Are the task dependencies logically ordered so that foundational work comes before dependent work, with no circular dependencies?"
         depends_on:
           - technical-design
         on_fail: retry
@@ -76,11 +215,43 @@ phases:
           and implementation plan. Focus on the core business rules and
           algorithms first, without worrying about API layers or persistence.
           Keep functions small, well-named, and testable in isolation.
+        extract_requirements:
+          - field: files_changed
+            type: array
+            min_items: 1
+          - field: functions_implemented
+            type: array
+            min_items: 1
+        expected_output_format:
+          files_changed:
+            - path: "src/core/feature.ts"
+              description: "Core business logic"
+          functions_implemented:
+            - name: "processFeature"
+              file: "src/core/feature.ts"
+              handles_edge_cases: true
         acceptance_criteria:
-          - Core logic is implemented and handles the primary use case
-          - Edge cases identified in requirements are handled
-          - Code follows existing project style and conventions
-          - No hardcoded values that should be configurable
+          - id: core-logic-implemented
+            description: "Core logic is implemented and handles the primary use case"
+            rule:
+              type: count
+              field: functions_implemented
+              min: 1
+          - id: edge-cases-handled
+            description: "Edge cases identified in requirements are handled"
+            rule:
+              type: llm
+              prompt: "Does the implementation handle the edge cases and error conditions identified in the requirements analysis, not just the happy path?"
+          - id: follows-conventions
+            description: "Code follows existing project style and conventions"
+            rule:
+              type: llm
+              prompt: "Does the code follow the existing project style, naming conventions, and patterns visible in the surrounding codebase?"
+          - id: no-hardcoded-values
+            description: "No hardcoded values that should be configurable"
+            rule:
+              type: llm
+              prompt: "Are there any magic numbers, hardcoded strings, or configuration values that should be extracted to constants or configuration files?"
         on_fail: retry
 
       - id: api-interface-layer
@@ -91,10 +262,38 @@ phases:
           return meaningful error messages, and ensure response formats match
           the technical design. Follow existing patterns in the codebase for
           routing, serialization, and error handling.
+        extract_requirements:
+          - field: endpoints
+            type: array
+            min_items: 1
+          - field: validations
+            type: array
+        expected_output_format:
+          endpoints:
+            - method: "POST"
+              path: "/api/v1/resource"
+              file: "src/routes/resource.ts"
+          validations:
+            - field: "name"
+              rule: "required, non-empty string"
+              error_message: "Name is required"
         acceptance_criteria:
-          - All specified endpoints or interface components are implemented
-          - Input validation rejects malformed requests with clear error messages
-          - Response formats match the documented API contract
+          - id: endpoints-implemented
+            description: "All specified endpoints or interface components are implemented"
+            rule:
+              type: count
+              field: endpoints
+              min: 1
+          - id: input-validation
+            description: "Input validation rejects malformed requests with clear error messages"
+            rule:
+              type: llm
+              prompt: "Does every endpoint validate its inputs and return clear, specific error messages for malformed requests?"
+          - id: response-format-matches
+            description: "Response formats match the documented API contract"
+            rule:
+              type: llm
+              prompt: "Do the response formats match what was specified in the technical design document?"
         depends_on:
           - core-implementation
         on_fail: retry
@@ -107,10 +306,37 @@ phases:
           possible. Add appropriate indexes for query patterns identified in
           the design. Handle serialization and deserialization between the
           storage format and domain objects.
+        extract_requirements:
+          - field: models
+            type: array
+            min_items: 1
+          - field: migrations
+            type: array
+        expected_output_format:
+          models:
+            - name: "Resource"
+              fields: ["id", "name", "created_at"]
+              file: "src/models/resource.ts"
+          migrations:
+            - file: "migrations/001_create_resources.sql"
+              reversible: true
         acceptance_criteria:
-          - Data models are defined with correct field types and constraints
-          - Migrations run forward and backward without errors
-          - Queries use appropriate indexes and avoid N+1 patterns
+          - id: models-defined
+            description: "Data models are defined with correct field types and constraints"
+            rule:
+              type: count
+              field: models
+              min: 1
+          - id: migrations-reversible
+            description: "Migrations run forward and backward without errors"
+            rule:
+              type: llm
+              prompt: "Are the database migrations reversible, and do they include both up and down operations?"
+          - id: query-efficiency
+            description: "Queries use appropriate indexes and avoid N+1 patterns"
+            rule:
+              type: llm
+              prompt: "Do the queries use appropriate indexes for the access patterns, and are there any N+1 query patterns or unbounded result sets?"
         depends_on:
           - core-implementation
         on_fail: retry
@@ -123,11 +349,46 @@ phases:
           initialization. Verify that data flows correctly from the interface
           through the business logic to storage and back. Resolve any
           interface mismatches between layers.
+        extract_requirements:
+          - field: connections
+            type: array
+            min_items: 1
+          - field: verified_paths
+            type: array
+            min_items: 1
+        expected_output_format:
+          connections:
+            - from: "API layer"
+              to: "core logic"
+              mechanism: "dependency injection"
+          verified_paths:
+            - path: "create"
+              status: "working"
+            - path: "read"
+              status: "working"
         acceptance_criteria:
-          - All layers are connected and the feature runs end to end
-          - No import errors or missing dependency wiring
-          - Data round-trips correctly through create, read, update, and delete paths
-          - Error conditions propagate meaningful messages to the user
+          - id: layers-connected
+            description: "All layers are connected and the feature runs end to end"
+            rule:
+              type: count
+              field: connections
+              min: 1
+          - id: no-import-errors
+            description: "No import errors or missing dependency wiring"
+            rule:
+              type: llm
+              prompt: "Are all imports resolved and dependencies properly wired, with no missing or circular dependencies?"
+          - id: data-round-trip
+            description: "Data round-trips correctly through create, read, update, and delete paths"
+            rule:
+              type: count
+              field: verified_paths
+              min: 1
+          - id: error-propagation
+            description: "Error conditions propagate meaningful messages to the user"
+            rule:
+              type: llm
+              prompt: "Do error conditions propagate meaningful, user-facing messages rather than exposing raw stack traces or generic errors?"
         depends_on:
           - api-interface-layer
           - data-layer
@@ -147,10 +408,45 @@ phases:
           external dependencies so tests run quickly and deterministically.
           Aim for meaningful coverage of business rules rather than chasing
           a percentage metric.
+        extract_requirements:
+          - field: test_cases
+            type: array
+            min_items: 3
+          - field: test_result
+            type: object
+        expected_output_format:
+          test_cases:
+            - name: "handles valid input"
+              type: "happy_path"
+              file: "tests/unit/feature.test.ts"
+            - name: "rejects empty input"
+              type: "edge_case"
+              file: "tests/unit/feature.test.ts"
+            - name: "throws on network failure"
+              type: "error_condition"
+              file: "tests/unit/feature.test.ts"
+          test_result:
+            passed: true
+            total: 3
+            failures: 0
         acceptance_criteria:
-          - Tests cover the primary happy-path scenario
-          - At least two edge cases or error conditions are tested
-          - All unit tests pass when run in isolation
+          - id: happy-path-covered
+            description: "Tests cover the primary happy-path scenario"
+            rule:
+              type: contains
+              field: test_cases
+              value: "happy_path"
+          - id: edge-cases-tested
+            description: "At least two edge cases or error conditions are tested"
+            rule:
+              type: count
+              field: test_cases
+              min: 3
+          - id: tests-pass
+            description: "All unit tests pass when run in isolation"
+            rule:
+              type: exists
+              field: test_result.passed
         on_fail: retry
 
       - id: integration-tests
@@ -161,10 +457,38 @@ phases:
           assert on response status codes and body content. Verify that data
           is correctly persisted and retrievable. Use test fixtures or
           factories to set up required state.
+        extract_requirements:
+          - field: integration_test_cases
+            type: array
+            min_items: 1
+          - field: test_result
+            type: object
+        expected_output_format:
+          integration_test_cases:
+            - name: "full request-response cycle"
+              verifies: ["status code", "response body", "data persistence"]
+              file: "tests/integration/feature.test.ts"
+          test_result:
+            passed: true
+            total: 1
+            failures: 0
         acceptance_criteria:
-          - At least one integration test exercises the full request-response cycle
-          - Tests verify data persistence and retrieval
-          - All integration tests pass in the test environment
+          - id: full-cycle-test
+            description: "At least one integration test exercises the full request-response cycle"
+            rule:
+              type: count
+              field: integration_test_cases
+              min: 1
+          - id: persistence-verified
+            description: "Tests verify data persistence and retrieval"
+            rule:
+              type: llm
+              prompt: "Do the integration tests verify that data is correctly persisted to storage and can be retrieved, not just that the API returns a response?"
+          - id: integration-tests-pass
+            description: "All integration tests pass in the test environment"
+            rule:
+              type: exists
+              field: test_result.passed
         depends_on:
           - unit-tests
         on_fail: retry
@@ -177,10 +501,41 @@ phases:
           met. Test with realistic data and check for visual or behavioral
           issues that automated tests may miss. Document any anomalies found
           during verification.
+        extract_requirements:
+          - field: verification_results
+            type: array
+            min_items: 1
+          - field: open_issues
+            type: array
+        expected_output_format:
+          verification_results:
+            - user_story: "As a user I want to..."
+              criteria_checked:
+                - criterion: "criterion 1"
+                  result: "pass"
+                - criterion: "criterion 2"
+                  result: "pass"
+          open_issues:
+            - severity: "low"
+              description: "Minor alignment issue on mobile"
         acceptance_criteria:
-          - Each user story's acceptance criteria has been verified manually
-          - No critical or high-severity issues remain open
-          - Verification results are documented with pass or fail per criterion
+          - id: all-stories-verified
+            description: "Each user story's acceptance criteria has been verified manually"
+            rule:
+              type: count
+              field: verification_results
+              min: 1
+          - id: no-critical-issues
+            description: "No critical or high-severity issues remain open"
+            rule:
+              type: llm
+              prompt: "Are there any open issues with critical or high severity that would block release?"
+          - id: results-documented
+            description: "Verification results are documented with pass or fail per criterion"
+            rule:
+              type: each_has_fields
+              field: verification_results
+              required: [user_story, criteria_checked]
         depends_on:
           - integration-tests
         on_fail: retry
@@ -200,11 +555,44 @@ phases:
           credentials are included. Assess performance implications and
           confirm there are no obvious security vulnerabilities such as
           injection or broken access control.
+        extract_requirements:
+          - field: review_checklist
+            type: array
+            min_items: 4
+          - field: issues_found
+            type: array
+        expected_output_format:
+          review_checklist:
+            - category: "dead code"
+              status: "clean"
+            - category: "secrets"
+              status: "clean"
+            - category: "performance"
+              status: "acceptable"
+            - category: "security"
+              status: "clean"
+          issues_found: []
         acceptance_criteria:
-          - No dead code, debug statements, or TODO comments left unresolved
-          - No secrets, credentials, or sensitive data in the changeset
-          - Performance-sensitive paths have been considered and are acceptable
-          - Security checklist items (input validation, auth, injection) are addressed
+          - id: no-dead-code
+            description: "No dead code, debug statements, or TODO comments left unresolved"
+            rule:
+              type: llm
+              prompt: "Is the changeset free of dead code, leftover debug statements (console.log, print, debugger), and unresolved TODO/FIXME comments?"
+          - id: no-secrets
+            description: "No secrets, credentials, or sensitive data in the changeset"
+            rule:
+              type: llm
+              prompt: "Does the changeset contain any hardcoded secrets, API keys, credentials, tokens, or sensitive data that should not be committed?"
+          - id: performance-acceptable
+            description: "Performance-sensitive paths have been considered and are acceptable"
+            rule:
+              type: llm
+              prompt: "Have performance-sensitive code paths been reviewed, and are there any obvious performance issues like unbounded loops, missing pagination, or excessive allocations?"
+          - id: security-addressed
+            description: "Security checklist items (input validation, auth, injection) are addressed"
+            rule:
+              type: llm
+              prompt: "Are security concerns addressed, including input validation, authentication checks, authorization boundaries, and protection against injection attacks?"
         on_fail: retry
 
       - id: documentation
@@ -215,10 +603,34 @@ phases:
           appropriate. Ensure inline code comments explain non-obvious design
           decisions. Update the changelog or release notes if the project
           maintains them.
+        extract_requirements:
+          - field: docs_updated
+            type: array
+            min_items: 1
+          - field: changelog_updated
+            type: string
+        expected_output_format:
+          docs_updated:
+            - file: "docs/api.md"
+              change: "Added POST /api/v1/resource endpoint"
+          changelog_updated: "yes"
         acceptance_criteria:
-          - Public API changes are reflected in documentation
-          - Non-obvious code sections have explanatory comments
-          - Changelog or release notes are updated if applicable
+          - id: api-docs-updated
+            description: "Public API changes are reflected in documentation"
+            rule:
+              type: count
+              field: docs_updated
+              min: 1
+          - id: code-comments
+            description: "Non-obvious code sections have explanatory comments"
+            rule:
+              type: llm
+              prompt: "Do non-obvious design decisions and complex code sections have explanatory inline comments?"
+          - id: changelog-updated
+            description: "Changelog or release notes are updated if applicable"
+            rule:
+              type: exists
+              field: changelog_updated
         depends_on:
           - code-review
         on_fail: retry
