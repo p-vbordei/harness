@@ -5,7 +5,8 @@
 # The harness will auto-discover any .yaml file in the sops/ directory.
 #
 # Required top-level fields: sop_id, name, phases
-# Optional top-level fields: description, default_retry_limit, pass_threshold
+# Optional top-level fields: description, default_retry_limit, pass_threshold,
+#                            stall_epsilon
 # =============================================================================
 
 # Unique identifier used to start the SOP: /harness <sop_id>
@@ -30,6 +31,13 @@ default_retry_limit: 3
 # weighted average. Additionally, no single dimension may score below 3.
 # Default: 3.5
 pass_threshold: 3.5
+
+# Early-escalation guard: if a retry fails to improve the weighted score by at
+# least this much over the best prior attempt, the executor is judged unable to
+# benefit from the feedback and the step escalates to human review instead of
+# burning the remaining retries. Omit to inherit the engine default (0.3);
+# set higher to escalate sooner, or 0 to escalate only on outright regression.
+# stall_epsilon: 0.3
 
 # --- Future / Optional Fields (not yet enforced by the engine) ---
 #

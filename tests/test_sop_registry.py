@@ -101,6 +101,25 @@ def test_build_step_states(registry):
     assert states[0].max_attempts == 2  # from default_retry_limit
 
 
+def test_stall_epsilon_parsed(tmp_path):
+    sop = dict(MINIMAL_SOP, stall_epsilon=0.5)
+    (tmp_path / "s.yaml").write_text(yaml.dump(sop))
+    reg = SOPRegistry(search_dirs=[tmp_path])
+    assert reg.get_sop("test-sop").stall_epsilon == 0.5
+
+
+def test_stall_epsilon_defaults_to_none(registry):
+    # Absent from YAML -> None, so the orchestrator default applies.
+    assert registry.get_sop("test-sop").stall_epsilon is None
+
+
+def test_negative_stall_epsilon_rejected(tmp_path):
+    sop = dict(MINIMAL_SOP, stall_epsilon=-1)
+    (tmp_path / "s.yaml").write_text(yaml.dump(sop))
+    with pytest.raises(ValueError, match="stall_epsilon"):
+        SOPRegistry(search_dirs=[tmp_path])
+
+
 def test_malformed_sop_missing_fields(tmp_path):
     bad_file = tmp_path / "bad.yaml"
     bad_file.write_text(yaml.dump({"sop_id": "bad"}))
