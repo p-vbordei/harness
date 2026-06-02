@@ -49,9 +49,13 @@ def _pass_eval_json():
     } | {"slop_flags": [], "top_3_fixes": []}
 
 
-def _fail_eval_json():
+def _fail_eval_json(scores: dict | None = None):
+    """Failing evaluation. `scores` overrides per-dimension scores (default 2)."""
+    dim_scores = {dim: 2 for dim in DIMENSIONS}
+    if scores:
+        dim_scores.update(scores)
     return {
-        dim: {"score": 2, "evidence": "Bad", "gap": "Fix it"}
+        dim: {"score": dim_scores[dim], "evidence": "Bad", "gap": "Fix it"}
         for dim in DIMENSIONS
     } | {"slop_flags": ["filler"], "top_3_fixes": ["Fix X", "Fix Y"]}
 
@@ -200,6 +204,103 @@ async def test_report_evaluation_exhausts_retries(setup):
     assert not resp.success
     assert "Human review" in resp.message
     assert resp.stage == "blocked"
+
+
+# ------------------------------------------------------------------
+# Stall-aware early escalation tests
+# ------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_report_evaluation_escalates_early_when_stalled(setup):
+    """A flat score across attempts escalates before retries are exhausted.
+
+    With retry_limit=3 the second failure would normally leave one retry. But
+    if the score did not improve (executor is not benefiting from feedback),
+    burning the last attempt is wasted work -- escalate to a human instead.
+    """
+    orch, _ = setup
+    start = orch.start_session("test-sop", retry_limit=3)
+    session_id = start.session_id
+
+    # Attempt 1 -- fails at 2.0
+    await orch.submit_step(session_id, VALID_OUTPUT)
+    orch.report_evaluation(session_id, _fail_eval_json())
+
+    # Attempt 2 -- fails at 2.0 again (no improvement); one retry still remains
+    await orch.submit_step(session_id, VALID_OUTPUT)
+    resp = orch.report_evaluation(session_id, _fail_eval_json())
+
+    assert not resp.success
+    assert resp.stage == "blocked"
+    assert "stall" in resp.message.lower()
+    assert resp.data.get("escalation") is True
+
+
+@pytest.mark.asyncio
+async def test_sop_stall_epsilon_overrides_orchestrator_default(tmp_path):
+    """A SOP-level stall_epsilon overrides the orchestrator's default epsilon."""
+    sop = {
+        "sop_id": "strict-stall",
+        "name": "Strict Stall SOP",
+        "default_retry_limit": 3,
+        "stall_epsilon": 1.0,  # demand a full point of improvement per attempt
+        "phases": [{
+            "id": "p1", "name": "P1", "steps": [
+                {"id": "s1", "title": "Step 1", "instruction": "Do it",
+                 "acceptance_criteria": ["Criterion A"]},
+            ],
+        }],
+    }
+    sop_dir = tmp_path / "sops"
+    sop_dir.mkdir()
+    (sop_dir / "strict.yaml").write_text(yaml.dump(sop))
+    session_dir = tmp_path / "sessions"
+    session_dir.mkdir()
+    orch = Orchestrator(
+        SOPRegistry(search_dirs=[sop_dir]),
+        SessionManager(base_dir=session_dir),
+        SubagentEvaluator(),
+    )
+
+    start = orch.start_session("strict-stall")
+    session_id = start.session_id
+
+    # Attempt 1 -- 2.0
+    await orch.submit_step(session_id, VALID_OUTPUT)
+    orch.report_evaluation(session_id, _fail_eval_json())
+
+    # Attempt 2 -- improved to ~2.45 (delta 0.45). Under the default 0.3 this
+    # would keep retrying; this SOP demands >= 1.0 improvement, so it stalls.
+    await orch.submit_step(session_id, VALID_OUTPUT)
+    resp = orch.report_evaluation(
+        session_id, _fail_eval_json({"completeness": 3, "specificity": 3})
+    )
+
+    assert not resp.success
+    assert resp.stage == "blocked"
+    assert "stall" in resp.message.lower()
+
+
+@pytest.mark.asyncio
+async def test_report_evaluation_keeps_retrying_when_improving(setup):
+    """An improving score keeps its retry -- stall detection must not over-fire."""
+    orch, _ = setup
+    start = orch.start_session("test-sop", retry_limit=3)
+    session_id = start.session_id
+
+    # Attempt 1 -- 2.0
+    await orch.submit_step(session_id, VALID_OUTPUT)
+    orch.report_evaluation(session_id, _fail_eval_json())
+
+    # Attempt 2 -- improved to ~2.45 (delta >= epsilon), still failing
+    await orch.submit_step(session_id, VALID_OUTPUT)
+    resp = orch.report_evaluation(
+        session_id, _fail_eval_json({"completeness": 3, "specificity": 3})
+    )
+
+    assert resp.success  # retry still offered
+    assert resp.stage == "awaiting_step"
+    assert "retries remaining" in resp.message.lower()
 
 
 # ------------------------------------------------------------------

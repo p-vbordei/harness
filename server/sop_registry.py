@@ -48,6 +48,7 @@ class SOPDefinition:
     description: str = ""
     default_retry_limit: int = 3
     pass_threshold: float = 3.5
+    stall_epsilon: Optional[float] = None  # None = inherit orchestrator default
     meta_criteria: list[str] = field(default_factory=list)
     phases: list[SOPPhase] = field(default_factory=list)
 
@@ -130,12 +131,21 @@ def _validate_sop(raw: dict, source: str) -> SOPDefinition:
     total_steps = sum(len(p.steps) for p in phases)
     if total_steps == 0:
         raise ValueError(f"SOP file '{source}' has no steps defined in any phase")
+    stall_epsilon = raw.get("stall_epsilon")
+    if stall_epsilon is not None:
+        stall_epsilon = float(stall_epsilon)
+        if stall_epsilon < 0:
+            raise ValueError(
+                f"SOP file '{source}' has invalid stall_epsilon {stall_epsilon}; "
+                "must be a non-negative number"
+            )
     return SOPDefinition(
         sop_id=raw["sop_id"],
         name=raw["name"],
         description=raw.get("description", ""),
         default_retry_limit=raw.get("default_retry_limit", 3),
         pass_threshold=raw.get("pass_threshold", 3.5),
+        stall_epsilon=stall_epsilon,
         meta_criteria=raw.get("meta_criteria", []),
         phases=phases,
     )

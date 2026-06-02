@@ -41,6 +41,13 @@ logger = logging.getLogger(__name__)
 
 Evaluator = Union[SubagentEvaluator, AnthropicEvaluator, OpenAICompatibleEvaluator]
 
+# Minimum weighted-score gain between attempts that counts as progress. When a
+# retry fails to clear this bar, the executor is not benefiting from the feedback
+# (harness-benefit is non-monotonic: a sub-threshold executor cannot act on the
+# fixes), so further retries are wasted -- escalate instead of burning them.
+# Set the orchestrator's stall_epsilon to None to disable this short-circuit.
+STALL_EPSILON = 0.3
+
 
 class Orchestrator:
     """Drives the harness workflow: start sessions, submit steps, iterate on feedback."""
@@ -51,11 +58,13 @@ class Orchestrator:
         session_manager: SessionManager,
         evaluator: Evaluator,
         usage_tracker: Optional[UsageTracker] = None,
+        stall_epsilon: Optional[float] = STALL_EPSILON,
     ) -> None:
         self._sops = sop_registry
         self._sessions = session_manager
         self._evaluator = evaluator
         self._usage = usage_tracker
+        self._stall_epsilon = stall_epsilon
 
     @property
     def is_subagent_mode(self) -> bool:
@@ -778,6 +787,36 @@ class Orchestrator:
             elicitation=elicitation,
         )
 
+    def _effective_stall_epsilon(self, session: SessionState) -> Optional[float]:
+        """Resolve the stall epsilon for a session: SOP-level overrides the default."""
+        try:
+            sop = self._sops.get_sop(session.sop_id)
+        except KeyError:
+            return self._stall_epsilon
+        if sop.stall_epsilon is not None:
+            return sop.stall_epsilon
+        return self._stall_epsilon
+
+    def _is_stalled(self, step: Any, epsilon: Optional[float]) -> bool:
+        """True when retries have stopped improving the score.
+
+        Compares the latest attempt's weighted score against the best of the
+        prior attempts. If it failed to improve by at least ``epsilon``, the
+        executor is not benefiting from the feedback and the remaining attempts
+        would be wasted. Returns False when disabled (epsilon is None) or when
+        fewer than two scored attempts exist.
+        """
+        if epsilon is None:
+            return False
+        scores = [
+            a.evaluation["weighted_score"]
+            for a in step.attempts
+            if a.evaluation and "weighted_score" in a.evaluation
+        ]
+        if len(scores) < 2:
+            return False
+        return (scores[-1] - max(scores[:-1])) < epsilon
+
     def _handle_failure(
         self,
         session: SessionState,
@@ -786,8 +825,9 @@ class Orchestrator:
     ) -> HarnessResponse:
         """Handle a failed evaluation: retry, skip, abort, or escalate."""
         current = session.current_step
+        stalled = self._is_stalled(current, self._effective_stall_epsilon(session))
 
-        if current.retries_remaining > 0:
+        if current.retries_remaining > 0 and not stalled:
             current.status = StepStatus.IN_PROGRESS
             self._sessions.save_session(session)
 
@@ -865,16 +905,26 @@ class Orchestrator:
 
         self._sessions.log_event(session.session_id, "human_escalation", {
             "step_id": current.step_id,
-            "attempts_exhausted": current.max_attempts,
+            "reason": "stalled" if stalled else "attempts_exhausted",
+            "attempts_used": current.current_attempt,
+            "max_attempts": current.max_attempts,
             "best_score": evaluation.weighted_score,
         })
 
-        return HarnessResponse(
-            success=False,
-            message=(
+        if stalled:
+            escalation_message = (
+                f"Step '{current.title}' stalled after {current.current_attempt} attempts "
+                "(score not improving). Human review required."
+            )
+        else:
+            escalation_message = (
                 f"Step '{current.title}' failed after {current.max_attempts} attempts. "
                 "Human review required."
-            ),
+            )
+
+        return HarnessResponse(
+            success=False,
+            message=escalation_message,
             session_id=session.session_id,
             stage="blocked",
             step_index=session.step_index,
